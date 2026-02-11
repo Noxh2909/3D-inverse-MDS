@@ -1,17 +1,11 @@
-from typing import cast
 import csv
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
+from scipy.spatial import procrustes
 from PIL import Image
-from scipy.stats import spearmanr
-import seaborn as sns
-
-def safe_spearmanr(x: np.ndarray, y: np.ndarray) -> float:
-    r, _ = spearmanr(x, y)
-    return cast(float, r)
 
 
 # -------------------------------------------------
@@ -19,7 +13,7 @@ def safe_spearmanr(x: np.ndarray, y: np.ndarray) -> float:
 # -------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
-RESULTS_DIR = BASE_DIR / "results"
+FINAL_RESULTS_DIR = BASE_DIR / "final_results"
 PICTURES_DIR = BASE_DIR / "pictures"
 ANALYSIS_DIR = BASE_DIR / "analysis"
 ANALYSIS_DIR.mkdir(exist_ok=True)
@@ -29,8 +23,16 @@ ANALYSIS_3D_DIR = ANALYSIS_DIR / "3d"
 ANALYSIS_2D_DIR.mkdir(exist_ok=True)
 ANALYSIS_3D_DIR.mkdir(exist_ok=True)
 
-ANALYSIS_COMPARE_DIR = ANALYSIS_DIR / "compare"
-ANALYSIS_COMPARE_DIR.mkdir(exist_ok=True)
+PROCRUSTES_DIR = ANALYSIS_DIR / "procrustes"
+PROCRUSTES_2D_DIR = PROCRUSTES_DIR / "2d"
+PROCRUSTES_3D_DIR = PROCRUSTES_DIR / "3d"
+PROCRUSTES_DIR.mkdir(exist_ok=True)
+PROCRUSTES_2D_DIR.mkdir(exist_ok=True)
+PROCRUSTES_3D_DIR.mkdir(exist_ok=True)
+
+# Set to True for anonymous participant labels (Participant 1, 2, 3...)
+# Set to False to use actual folder names
+ANONYMOUS = True
 
 
 # -------------------------------------------------
@@ -125,111 +127,11 @@ def plot_dissimilarity_matrix(names, D, csv_name, out_dir):
     plt.colorbar(im, fraction=0.046, pad=0.04)
     plt.title("Dissimilarity Matrix (Euclidean Distance)")
 
-    out = out_dir / f"{csv_name}_dissimilarity.png"
+    out = out_dir / f"{csv_name}.png"
     plt.savefig(out, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
     print(f"Saved: {out}")
-
-
-# -------------------------------------------------
-# COMPARISON ANALYSES
-# -------------------------------------------------
-
-def vectorize_upper_triangle(D):
-    return D[np.triu_indices_from(D, k=1)]
-
-def mantel_test(D1, D2, permutations=500, seed=42):
-    rng = np.random.default_rng(seed)
-
-    vec1 = vectorize_upper_triangle(D1)
-    vec2 = vectorize_upper_triangle(D2)
-
-    obs_corr = safe_spearmanr(vec1, vec2)
-
-    null_dist = np.zeros(permutations, dtype=float)
-
-    n = D1.shape[0]
-    for i in range(permutations):
-        perm = rng.permutation(n)
-        D2_perm = D2[perm][:, perm]
-        vec2_perm = vectorize_upper_triangle(D2_perm)
-        null_dist[i] = safe_spearmanr(vec1, vec2_perm)
-
-    p_value = (np.sum(null_dist >= obs_corr) + 1) / (permutations + 1)
-    return obs_corr, null_dist, p_value
-
-def plot_distance_distribution(D2d_list, D3d_list, out_path):
-    all_2d = np.concatenate([vectorize_upper_triangle(D) for D in D2d_list])
-    all_3d = np.concatenate([vectorize_upper_triangle(D) for D in D3d_list])
-
-    plt.figure(figsize=(8,6))
-    sns.kdeplot(all_2d, label="2D", fill=True)
-    sns.kdeplot(all_3d, label="3D", fill=True)
-    plt.xlabel("Euclidean Distance")
-    plt.ylabel("Density")
-    plt.title("Distance Distribution: 2D vs 3D")
-    plt.legend()
-    plt.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    print(f"Saved: {out_path}")
-
-def plot_spearman_scatter(D2d_mean, D3d_mean, out_path):
-    vec_2d = vectorize_upper_triangle(D2d_mean)
-    vec_3d = vectorize_upper_triangle(D3d_mean)
-    corr = safe_spearmanr(vec_2d, vec_3d)
-
-    plt.figure(figsize=(7,7))
-    sns.scatterplot(x=vec_2d, y=vec_3d, alpha=0.6)
-    min_val = min(vec_2d.min(), vec_3d.min())
-    max_val = max(vec_2d.max(), vec_3d.max())
-    plt.plot([min_val, max_val], [min_val, max_val], linestyle="--", color="gray", linewidth=1)
-    plt.xlabel("Mean 2D Distances")
-    plt.ylabel("Mean 3D Distances")
-    plt.title(f"Spearman Correlation between 2D and 3D\nr = {corr:.3f}")
-    plt.grid(True)
-    plt.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    print(f"Saved: {out_path}")
-
-def plot_mantel_test(obs_corr, null_dist, out_path):
-    plt.figure(figsize=(8,6))
-    sns.histplot(null_dist, bins=30, kde=False, color="skyblue")
-    plt.axvline(obs_corr, color="red", linestyle="--", label=f"Observed r = {obs_corr:.3f}")
-    plt.xlabel("Spearman Correlation")
-    plt.ylabel("Frequency")
-    plt.title("Mantel Test Null Distribution")
-    plt.legend()
-    plt.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    print(f"Saved: {out_path}")
-
-def knn_overlap(D2d_mean, D3d_mean, k_values=[3,5]):
-    n = D2d_mean.shape[0]
-    overlaps = {k: [] for k in k_values}
-
-    for k in k_values:
-        for i in range(n):
-            neighbors_2d = set(np.argsort(D2d_mean[i])[1:k+1])
-            neighbors_3d = set(np.argsort(D3d_mean[i])[1:k+1])
-            overlap = len(neighbors_2d.intersection(neighbors_3d)) / k
-            overlaps[k].append(overlap)
-
-    return overlaps
-
-def plot_knn_overlap(overlaps, out_path):
-    means = [np.mean(overlaps[k]) for k in sorted(overlaps.keys())]
-    ks = sorted(overlaps.keys())
-
-    plt.figure(figsize=(6,5))
-    sns.barplot(hue=[str(k) for k in ks], y=means, palette="pastel")
-    plt.ylim(0,1)
-    plt.xlabel("k")
-    plt.ylabel("Average k-NN Overlap")
-    plt.title("Neighborhood Preservation: 2D vs 3D")
-    plt.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    print(f"Saved: {out_path}")
 
 
 # -------------------------------------------------
@@ -240,66 +142,206 @@ def analyze_csv(csv_path, out_dir):
     names, coords = load_embedding(csv_path)
     if len(coords) < 2:
         print("Not enough points:", csv_path)
-        return None, None
+        return
 
     D = squareform(pdist(coords, metric="euclidean"))
     csv_name = csv_path.stem
     plot_dissimilarity_matrix(names, D, csv_name, out_dir)
-    return names, D
+
+
+# -------------------------------------------------
+# PROCRUSTES ANALYSIS
+# -------------------------------------------------
+
+def generalized_procrustes_analysis(coords_list):
+    """
+    Perform Generalized Procrustes Analysis (GPA) on a list of coordinate arrays.
+    Returns the mean shape and all aligned configurations.
+    """
+    if len(coords_list) == 0:
+        return None, []
+    
+    # Start with the first configuration as reference
+    aligned = [coords_list[0].copy()]
+    reference = coords_list[0].copy()
+    
+    # Align all other configurations to the reference
+    for coords in coords_list[1:]:
+        _, aligned_coords, _ = procrustes(reference, coords)
+        aligned.append(aligned_coords)
+    
+    # Iterative alignment to mean
+    for _ in range(10):  # 10 iterations usually sufficient
+        # Compute mean shape
+        mean_shape = np.mean(aligned, axis=0)
+        
+        # Re-align all to mean
+        new_aligned = []
+        for coords in aligned:
+            _, aligned_coords, _ = procrustes(mean_shape, coords)
+            new_aligned.append(aligned_coords)
+        aligned = new_aligned
+    
+    # Final mean shape
+    mean_shape = np.mean(aligned, axis=0)
+    return mean_shape, aligned
+
+
+def compute_procrustes_distance(coords1, coords2):
+    """Compute Procrustes distance (disparity) between two configurations."""
+    _, _, disparity = procrustes(coords1, coords2)
+    return disparity
+
+
+def plot_intersubject_consistency(disparities, participant_names, condition, out_path):
+    """Plot bar chart of Procrustes disparities for each participant."""
+    fig, ax = plt.subplots(figsize=(max(8, len(disparities) * 0.8), 6))
+    
+    x = np.arange(len(disparities))
+    bars = ax.bar(x, disparities, color='steelblue', edgecolor='black')
+    
+    # Add mean line
+    mean_disp = np.mean(disparities)
+    ax.axhline(mean_disp, color='red', linestyle='--', linewidth=2, 
+               label=f'Mean: {mean_disp:.4f}')
+    
+    ax.set_xlabel('Participant')
+    ax.set_ylabel('Procrustes Disparity')
+    ax.set_title(f'Intersubject Consistency - {condition.upper()}\n(lower = more consistent)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(participant_names, rotation=45, ha='right')
+    ax.legend()
+    
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, condition, out_path):
+    """Plot pairwise Procrustes dissimilarity matrix between all participants."""
+    n = len(coords_list)
+    D = np.zeros((n, n))
+    
+    # Compute pairwise Procrustes disparities
+    for i in range(n):
+        for j in range(i + 1, n):
+            _, _, disparity = procrustes(coords_list[i], coords_list[j])
+            D[i, j] = disparity
+            D[j, i] = disparity
+    
+    # Plot matrix
+    fig, ax = plt.subplots(figsize=(max(8, n * 0.8), max(8, n * 0.8)))
+    im = ax.imshow(D, cmap="viridis")
+    
+    # Add values inside cells
+    for i in range(n):
+        for j in range(n):
+            ax.text(
+                j, i,
+                f"{D[i, j]:.3f}",
+                ha="center",
+                va="center",
+                color="white" if D[i, j] > D.max() * 0.5 else "black",
+                fontsize=8
+            )
+    
+    ax.set_xticks(np.arange(n))
+    ax.set_yticks(np.arange(n))
+    ax.set_xticklabels(participant_names, rotation=45, ha='right')
+    ax.set_yticklabels(participant_names)
+    
+    plt.colorbar(im, fraction=0.046, pad=0.04)
+    plt.title(f"Procrustes Dissimilarity Matrix - {condition.upper()}")
+    
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
 
 
 def main(): 
-    all_names_2d = None
-    all_names_3d = None
-    dissimilarities_2d = []
-    dissimilarities_3d = []
-
-    for cond in ("2d", "3d"):
-        cond_dir = RESULTS_DIR / cond
-        if not cond_dir.exists():
+    # Collect all embeddings per condition
+    embeddings_2d = []  # list of (participant_name, names, coords)
+    embeddings_3d = []
+    
+    # Iterate through all participant folders in final_results
+    for participant_dir in FINAL_RESULTS_DIR.iterdir():
+        if not participant_dir.is_dir() or participant_dir.name.startswith('.'):
             continue
-        out_dir = ANALYSIS_2D_DIR if cond == "2d" else ANALYSIS_3D_DIR
-        for csv_file in cond_dir.glob("*.csv"):
-            names, D = analyze_csv(csv_file, out_dir)
-            if D is None:
+        
+        participant_name = participant_dir.name
+        
+        for cond in ("2d", "3d"):
+            cond_dir = participant_dir / cond
+            if not cond_dir.exists():
                 continue
-            if cond == "2d":
-                if all_names_2d is None:
-                    all_names_2d = names
-                dissimilarities_2d.append(D)
-            else:
-                if all_names_3d is None:
-                    all_names_3d = names
-                dissimilarities_3d.append(D)
-
-    # Only proceed if we have data for both conditions
-    if dissimilarities_2d and dissimilarities_3d:
-        # Check that names match between 2d and 3d
-        if all_names_2d != all_names_3d:
-            print("Warning: Stimulus names do not match between 2D and 3D. Comparison may be invalid.")
-
-        # Compute mean dissimilarity matrices
-        D2d_mean = np.mean(dissimilarities_2d, axis=0)
-        D3d_mean = np.mean(dissimilarities_3d, axis=0)
-
-        # 1) Distance distribution plot
-        dist_dist_path = ANALYSIS_COMPARE_DIR / "distance_distribution_2d_vs_3d.png"
-        plot_distance_distribution(dissimilarities_2d, dissimilarities_3d, dist_dist_path)
-
-        # 2) Spearman correlation comparison
-        spearman_path = ANALYSIS_COMPARE_DIR / "spearman_2d_vs_3d.png"
-        plot_spearman_scatter(D2d_mean, D3d_mean, spearman_path)
-
-        # 3) Mantel test
-        obs_corr, null_dist, p_value = mantel_test(D2d_mean, D3d_mean, permutations=500)
-        mantel_path = ANALYSIS_COMPARE_DIR / "mantel_2d_vs_3d.png"
-        plot_mantel_test(obs_corr, null_dist, mantel_path)
-        print(f"Mantel test p-value: {p_value:.4f}")
-
-        # 4) Neighborhood preservation
-        overlaps = knn_overlap(D2d_mean, D3d_mean, k_values=[3,5])
-        knn_path = ANALYSIS_COMPARE_DIR / "knn_overlap_2d_vs_3d.png"
-        plot_knn_overlap(overlaps, knn_path)
+            out_dir = ANALYSIS_2D_DIR if cond == "2d" else ANALYSIS_3D_DIR
+            for csv_file in cond_dir.glob("*.csv"):
+                # Create dissimilarity matrix
+                analyze_csv(csv_file, out_dir)
+                
+                # Load embedding for Procrustes
+                names, coords = load_embedding(csv_file)
+                if len(coords) >= 2:
+                    if cond == "2d":
+                        embeddings_2d.append((participant_name, names, coords))
+                    else:
+                        embeddings_3d.append((participant_name, names, coords))
+    
+    # Procrustes analysis for 2D condition
+    if len(embeddings_2d) >= 2:
+        print("\n--- Procrustes Analysis for 2D ---")
+        coords_list_2d = [e[2] for e in embeddings_2d]
+        if ANONYMOUS:
+            participant_names_2d = [f"Participant {i+1}" for i in range(len(embeddings_2d))]
+        else:
+            participant_names_2d = [e[0] for e in embeddings_2d]
+        
+        mean_shape_2d, aligned_2d = generalized_procrustes_analysis(coords_list_2d)
+        
+        # Compute disparity of each participant to mean
+        disparities_2d = []
+        for aligned_coords in aligned_2d:
+            disp = compute_procrustes_distance(mean_shape_2d, aligned_coords)
+            disparities_2d.append(disp)
+        
+        # Plot intersubject consistency
+        consistency_path_2d = PROCRUSTES_2D_DIR / "intersubject_consistency_2d.png"
+        plot_intersubject_consistency(disparities_2d, participant_names_2d, "2d", consistency_path_2d)
+        
+        # Plot Procrustes dissimilarity matrix
+        dissim_path_2d = PROCRUSTES_2D_DIR / "procrustes_dissimilarity_matrix_2d.png"
+        plot_procrustes_dissimilarity_matrix(coords_list_2d, participant_names_2d, "2d", dissim_path_2d)
+        
+        print(f"Mean disparity 2D: {np.mean(disparities_2d):.4f}")
+    
+    # Procrustes analysis for 3D condition
+    if len(embeddings_3d) >= 2:
+        print("\n--- Procrustes Analysis for 3D ---")
+        coords_list_3d = [e[2] for e in embeddings_3d]
+        if ANONYMOUS:
+            participant_names_3d = [f"Participant {i+1}" for i in range(len(embeddings_3d))]
+        else:
+            participant_names_3d = [e[0] for e in embeddings_3d]
+        
+        mean_shape_3d, aligned_3d = generalized_procrustes_analysis(coords_list_3d)
+        
+        # Compute disparity of each participant to mean
+        disparities_3d = []
+        for aligned_coords in aligned_3d:
+            disp = compute_procrustes_distance(mean_shape_3d, aligned_coords)
+            disparities_3d.append(disp)
+        
+        # Plot intersubject consistency
+        consistency_path_3d = PROCRUSTES_3D_DIR / "intersubject_consistency_3d.png"
+        plot_intersubject_consistency(disparities_3d, participant_names_3d, "3d", consistency_path_3d)
+        
+        # Plot Procrustes dissimilarity matrix
+        dissim_path_3d = PROCRUSTES_3D_DIR / "procrustes_dissimilarity_matrix_3d.png"
+        plot_procrustes_dissimilarity_matrix(coords_list_3d, participant_names_3d, "3d", dissim_path_3d)
+        
+        print(f"Mean disparity 3D: {np.mean(disparities_3d):.4f}")
 
 
 if __name__ == "__main__":
