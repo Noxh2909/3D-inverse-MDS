@@ -717,8 +717,7 @@ class DraggableToken(QLabel):
         # DO NOT CALL _set_preview_for_category() here – wrong preview!
 
         drag.exec(Qt.DropAction.MoveAction)
-
-    IS_DOCK_DRAG = False
+        IS_DOCK_DRAG = False
 
 # ---------------------------------------------------------------------
 # ---------------------------------------------------------------------
@@ -773,10 +772,6 @@ preview_layout.setSpacing(6)
 
 left_v.addWidget(preview_container)
 
-actions_row = QWidget(left_col)
-actions_h = QHBoxLayout(actions_row)
-actions_h.setContentsMargins(0, 0, 0, 0)
-actions_h.setSpacing(8)
 actions_row = QWidget(left_col)
 actions_h = QHBoxLayout(actions_row)
 actions_h.setContentsMargins(0, 0, 0, 0)
@@ -925,7 +920,7 @@ collapse_btn.raise_()
 
 is_collapsed = [False]  # Use list to allow modification in nested function
 
-def _toggle_checklist(bool):
+def _toggle_checklist(checked):
     if is_collapsed[0]:
         # Expand
         collapse_btn.setText("▼")
@@ -1178,17 +1173,17 @@ def _set_view_fitted(elevation=0, azimuth=0, zoom=1.0):
     extent = float(AXIS_LEN)
     dist = _fit_distance_for_extent(extent)
     dist *= float(zoom)
-    view.opts['center'] = _cube_center()
+    view.opts['center'] = _cube_center()  # type: ignore[assignment]
     view.setCameraPosition(distance=dist, elevation=elevation, azimuth=azimuth)
 
 def set_view_xy(offset_x=0, offset_y=0, offset_z=0):
     """True top-down view onto XZ plane, with adjustable center offset."""
-    view.opts['ortho'] = True
+    view.opts['ortho'] = True  # type: ignore[assignment]
 
     cx = AXIS_LEN * 0.5 + offset_x
     cy = AXIS_LEN * 0.5 + offset_y     
     cz = AXIS_LEN * 0.5 + offset_z
-    view.opts['center'] = QVector3D(cx, cy, cz)
+    view.opts['center'] = QVector3D(cx, cy, cz)  # type: ignore[assignment]
 
     view.setCameraPosition(
         distance=_fit_distance_for_extent(6),
@@ -1200,10 +1195,10 @@ def set_view_xy(offset_x=0, offset_y=0, offset_z=0):
 def set_view_default():
     """Reset camera to the program's initial perspective view."""
     try:
-        view.opts['ortho'] = False  # ensure perspective
+        view.opts['ortho'] = False  # type: ignore[assignment]  # ensure perspective
     except Exception:
         pass
-    view.opts['center'] = _cube_center()
+    view.opts['center'] = _cube_center()  # type: ignore[assignment]
     view.setCameraPosition(distance=_fit_distance_for_extent(14), elevation=35.3, azimuth=45)
 
     position_axis_labels()
@@ -1277,7 +1272,9 @@ def project_point(p):
     """Project a world 3D point to 2D view pixel coordinates (x, y)."""
     try:
         vm = view.viewMatrix()
-        pm = view.projectionMatrix()
+        region = (0, 0, view.width(), view.height())
+        viewport = (0, 0, view.width(), view.height())
+        pm = view.projectionMatrix(region, viewport)
         m = pm * vm
         v = QVector3D(float(p[0]), float(p[1]), float(p[2]))
         ndc = m.map(v)
@@ -1300,9 +1297,27 @@ def _camera_forward_vec3():
     """Compute normalized forward vector from camera to view center, or None."""
     try:
         cp = _camera_position_vec3()
-        ctr = view.opts.get('center')
-        if cp is None or ctr is None:
+        ctr_raw = view.opts.get('center')
+        if cp is None or ctr_raw is None:
             return None
+        if isinstance(ctr_raw, QVector3D):
+            ctr = ctr_raw
+        else:
+            try:
+                x_attr = getattr(ctr_raw, 'x', None)
+                if x_attr is not None and callable(x_attr):
+                    y_attr = getattr(ctr_raw, 'y')
+                    z_attr = getattr(ctr_raw, 'z')
+                    xv: float = float(x_attr())  # type: ignore[operator]
+                    yv: float = float(y_attr())  # type: ignore[operator]
+                    zv: float = float(z_attr())  # type: ignore[operator]
+                    ctr = QVector3D(xv, yv, zv)
+                else:
+                    seq = ctr_raw  # type: ignore[index]
+                    ctr = QVector3D(float(seq[0]), float(seq[1]), float(seq[2]))  # type: ignore[index]
+            except Exception:
+                seq = ctr_raw  # type: ignore[index]
+                ctr = QVector3D(float(seq[0]), float(seq[1]), float(seq[2]))  # type: ignore[index]
         c = np.array([float(ctr.x()), float(ctr.y()), float(ctr.z())], dtype=float)
         f = c - cp
         n = np.linalg.norm(f)
@@ -1341,7 +1356,9 @@ def screen_to_world_ray(px: int, py: int):
     nx = 2.0 * px / w - 1.0
     ny = 1.0 - 2.0 * py / h
     vm = view.viewMatrix()
-    pm = view.projectionMatrix()
+    region = (0, 0, w, h)
+    viewport = (0, 0, w, h)
+    pm = view.projectionMatrix(region, viewport)
     m = pm * vm
     try:
         inv = m.inverted()[0]
@@ -3056,8 +3073,8 @@ def _finalize_ui_startup():
 
     # 5) Kamera & Achsen
     if CURRENT_CONDITION == "2d":
-        rotate_and_adjust_cb.setChecked
-        adjust_token_height_cb.setChecked
+        rotate_and_adjust_cb.setChecked(True)
+        adjust_token_height_cb.setChecked(True)
         cb_lock.setChecked(True)  
         btn_grid.setDisabled(True)
         cb_lock.hide()

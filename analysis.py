@@ -97,13 +97,14 @@ def plot_dissimilarity_matrix(names, D, csv_name, out_dir):
 
     # --- image ticks ---
     for i, name in enumerate(names):
-        img = load_image(name)
-        if img is None:
+        img_x = load_image(name)
+        img_y = load_image(name)
+        if img_x is None:
             continue
 
         # X axis
         ab_x = AnnotationBbox(
-            img,
+            img_x,
             (i, -0.9),
             xycoords="data",
             frameon=False,
@@ -112,14 +113,15 @@ def plot_dissimilarity_matrix(names, D, csv_name, out_dir):
         ax.add_artist(ab_x)
 
         # Y axis
-        ab_y = AnnotationBbox(
-            img,
-            (-0.6, i),
-            xycoords="data",
-            frameon=False,
-            box_alignment=(1, 0.5)
-        )
-        ax.add_artist(ab_y)
+        if img_y is not None:
+            ab_y = AnnotationBbox(
+                img_y,
+                (-0.6, i),
+                xycoords="data",
+                frameon=False,
+                box_alignment=(1, 0.5)
+            )
+            ax.add_artist(ab_y)
 
     ax.set_xlim(-1, n - 0.5)
     ax.set_ylim(n - 0.5, -1)
