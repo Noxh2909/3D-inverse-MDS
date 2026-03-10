@@ -147,6 +147,8 @@ def analyze_csv(csv_path, out_dir):
         return
 
     D = squareform(pdist(coords, metric="euclidean"))
+    if D.max() > 0:
+        D = D / D.max()
     csv_name = csv_path.stem
     plot_dissimilarity_matrix(names, D, csv_name, out_dir)
 
