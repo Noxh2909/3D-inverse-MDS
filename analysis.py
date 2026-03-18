@@ -2,10 +2,10 @@ import csv
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from mpl_toolkits.mplot3d import Axes3D, proj3d
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from scipy.spatial import procrustes
-from scipy.stats import spearmanr, kendalltau
 from PIL import Image
 
 
@@ -71,6 +71,149 @@ def load_image(name, zoom=0.25):
     img = Image.open(path)
     arr = np.asarray(img)
     return OffsetImage(arr, zoom=zoom)
+
+
+def add_projected_images_3d(ax, names, coords, zoom=0.12):
+    """Project image thumbnails onto a 3D axes for static export."""
+    fig = ax.figure
+    fig.canvas.draw()
+
+    for name, (x_coord, y_coord, z_coord) in zip(names, coords):
+        image = load_image(name, zoom=zoom)
+        if image is None:
+            continue
+
+        x_proj, y_proj, _ = proj3d.proj_transform(x_coord, y_coord, z_coord,
+                                                  ax.get_proj())
+        annotation = AnnotationBbox(
+            image,
+            (x_proj, y_proj),
+            xycoords="data",
+            frameon=False,
+            pad=0.0,
+            box_alignment=(0.5, 0.5),
+            zorder=10,
+        )
+        ax.add_artist(annotation)
+
+# -------------------------------------------------
+# PER-PARTICIPANT STIMULUS ARRANGEMENT (2D scatter / 3D cube)
+# -------------------------------------------------
+
+def plot_participant_arrangement_2d(names, coords, participant_label, out_path):
+    """2D scatter of stimuli as placed by one participant, with stimulus images."""
+    fig, ax = plt.subplots(figsize=(8, 8))
+    x, y = coords[:, 0], coords[:, 1]
+    ax.scatter(x, y, alpha=0.0)  # invisible dots, images replace them
+
+    for i, name in enumerate(names):
+        img = load_image(name, zoom=0.20)
+        if img is not None:
+            ab = AnnotationBbox(img, (x[i], y[i]), frameon=False)
+            ax.add_artist(ab)
+        else:
+            ax.annotate(name, (x[i], y[i]), fontsize=7, ha="center")
+
+    pad = 0.15
+    rx = x.max() - x.min() if x.max() != x.min() else 1
+    ry = y.max() - y.min() if y.max() != y.min() else 1
+    ax.set_xlim(x.min() - pad * rx, x.max() + pad * rx)
+    ax.set_ylim(y.min() - pad * ry, y.max() + pad * ry)
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_title(f"Stimulus Arrangement 2D – {participant_label}")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.grid(True, linestyle=":", linewidth=0.5)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def _stimulus_label(name):
+    """Convert e.g. 'Stimuli_00.png' -> 'S01' (1-based)."""
+    stem = name.replace(".png", "").replace("Stimuli_", "")
+    try:
+        return f"S{int(stem)+1:02d}"
+    except ValueError:
+        return stem
+
+
+def plot_participant_arrangement_3d(names, coords, participant_label, out_path):
+    """3D cube scatter of stimuli as placed by one participant, with images."""
+    fig = plt.figure(figsize=(11, 10))
+    ax = fig.add_subplot(111, projection="3d")
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+
+    ax.scatter(x, y, z, s=0, alpha=0)
+    add_projected_images_3d(ax, names, coords, zoom=0.16)
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.set_title(f"Stimulus Arrangement 3D – {participant_label}")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+# -------------------------------------------------
+# OVERALL PROCRUSTES ARRANGEMENT (all aligned + mean)
+# -------------------------------------------------
+
+def plot_procrustes_arrangement_2d(aligned_list, mean_shape, participant_names,
+                                   stimulus_names, out_path):
+    """2D scatter showing only the Procrustes mean shape with stimulus images."""
+    fig, ax = plt.subplots(figsize=(12, 12))
+
+    ax.scatter(mean_shape[:, 0], mean_shape[:, 1], alpha=0.0)
+    for i, name in enumerate(stimulus_names):
+        img = load_image(name, zoom=0.22)
+        if img is not None:
+            ab = AnnotationBbox(img, (mean_shape[i, 0], mean_shape[i, 1]),
+                                frameon=False, zorder=5)
+            ax.add_artist(ab)
+        else:
+            ax.annotate(_stimulus_label(name),
+                        (mean_shape[i, 0], mean_shape[i, 1]),
+                        fontsize=10, ha="center")
+
+    pad = 0.15
+    rx = mean_shape[:, 0].max() - mean_shape[:, 0].min() or 1
+    ry = mean_shape[:, 1].max() - mean_shape[:, 1].min() or 1
+    ax.set_xlim(mean_shape[:, 0].min() - pad * rx, mean_shape[:, 0].max() + pad * rx)
+    ax.set_ylim(mean_shape[:, 1].min() - pad * ry, mean_shape[:, 1].max() + pad * ry)
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_title("Procrustes Mean Shape (2D)")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.grid(True, linestyle=":", linewidth=0.5)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def plot_procrustes_arrangement_3d(aligned_list, mean_shape, participant_names,
+                                   stimulus_names, out_path):
+    """3D cube showing only the Procrustes mean shape with stimulus images."""
+    fig = plt.figure(figsize=(12, 11))
+    ax = fig.add_subplot(111, projection="3d")
+
+    ax.scatter(mean_shape[:, 0], mean_shape[:, 1], mean_shape[:, 2],
+               s=0, alpha=0)
+    add_projected_images_3d(ax, stimulus_names, mean_shape, zoom=0.18)
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.set_title("Procrustes Mean Shape (3D)")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
 
 # -------------------------------------------------
 # PLOT MATRIX WITH IMAGES + VALUES
@@ -357,329 +500,93 @@ def plot_knn_curve(coords_list, condition, out_path):
     print(f"Saved: {out_path}")
 
 
+def _compute_knn_scores(coords_list):
+    """Return (ks, scores) for a set of participant coordinate lists."""
+    D_mats = [squareform(pdist(c, metric="euclidean")) for c in coords_list]
+    D_consensus = np.mean(D_mats, axis=0)
+    n = D_consensus.shape[0]
+    ks = list(range(1, n))
+    scores = []
+    for k in ks:
+        vals = [knn_overlap(D, D_consensus, k) for D in D_mats]
+        scores.append(np.mean(vals))
+    return ks, scores
+
+
+def plot_knn_combined(coords_list_2d, coords_list_3d, out_path):
+    """Combined kNN preservation curve with 2D and 3D in one plot."""
+    ks_2d, scores_2d = _compute_knn_scores(coords_list_2d)
+    ks_3d, scores_3d = _compute_knn_scores(coords_list_3d)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(ks_2d, scores_2d, marker="o", label="2D")
+    ax.plot(ks_3d, scores_3d, marker="s", label="3D")
+
+    ax.set_xlabel("k Nearest Neighbours")
+    ax.set_ylabel("Neighbour preservation")
+    ax.set_title("kNN Preservation Curve (2D vs 3D)")
+    ax.set_ylim(0, 1)
+    ax.legend()
+    ax.grid(True, linestyle=":", linewidth=0.6)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
 # -------------------------------------------------
 # AXIS VARIANCE (DIMENSION USAGE)
 # -------------------------------------------------
 
-def plot_axis_variance(coords_list, condition, out_path):
-
+def plot_axis_variance(coords_list, condition, out_path, participant_names=None):
+    """Bar plot of mean per-axis variance with individual participant dots."""
     vars_all = []
-
     for coords in coords_list:
         v = np.var(coords, axis=0)
         v = v / np.sum(v)
         vars_all.append(v)
 
-    vars_all = np.asarray(vars_all)
-
+    vars_all = np.asarray(vars_all)  # (n_participants, n_dims)
+    n_dims = vars_all.shape[1]
+    dims = ["X", "Y", "Z"][:n_dims]
     mean_vars = np.mean(vars_all, axis=0)
 
-    dims = ["X", "Y", "Z"][:len(mean_vars)]
-
     fig, ax = plt.subplots(figsize=(6, 5))
 
-    ax.bar(dims, mean_vars)
+    x_pos = np.arange(n_dims)
+    ax.bar(x_pos, mean_vars, width=0.5, color="lightsteelblue",
+           edgecolor="black", label="Mean", zorder=2)
 
+    # participant dots share one fixed vertical line per axis and are distinguished by color
+    if participant_names is None:
+        participant_names = [f"Participant {i+1}" for i in range(len(vars_all))]
+
+    point_x = np.tile(x_pos, (len(vars_all), 1)).astype(float)
+    for d in range(n_dims):
+        order = np.argsort(vars_all[:, d])
+        offsets = np.linspace(-0.08, 0.08, len(vars_all))
+        point_x[order, d] += offsets
+
+    cmap = plt.cm.get_cmap("tab10", len(vars_all))
+    for p, pname in enumerate(participant_names):
+        color = cmap(p)
+        ax.scatter(point_x[p],
+                   vars_all[p], color=color, edgecolor="black",
+                   s=55, zorder=5, alpha=0.9, label=pname)
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(dims)
     ax.set_ylabel("Variance ratio")
     ax.set_title(f"Axis Variance ({condition.upper()})")
-
     ax.set_ylim(0, 1)
-
     ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
+    ax.legend(loc="upper right", fontsize=7, frameon=True)
 
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close(fig)
-
     print(f"Saved: {out_path}")
-
-
-# -------------------------------------------------
-# GLOBAL DISTANCE CORRELATION METRICS
-# -------------------------------------------------
-
-def plot_global_similarity_metrics(coords_list, condition, out_path):
-    """
-    Compute global similarity metrics between participant RDMs and the
-    consensus RDM. Metrics: Pearson, Spearman, Kendall, Cosine.
-    """
-
-    # compute distance matrices
-    D_mats = [squareform(pdist(c, metric="euclidean")) for c in coords_list]
-
-    # consensus matrix
-    D_consensus = np.mean(D_mats, axis=0)
-
-    # flatten consensus
-    v_ref = squareform(D_consensus, checks=False)
-
-    # flatten all participant distances
-    all_embed = []
-    for D in D_mats:
-        v = squareform(D, checks=False)
-        all_embed.extend(v)
-
-    all_embed = np.asarray(all_embed)
-
-    # repeat reference for same length
-    v_ref_rep = np.tile(v_ref, len(coords_list))
-
-    # --- metrics ---
-    pearson = np.corrcoef(v_ref_rep, all_embed)[0, 1]
-
-    spearman, _ = spearmanr(v_ref_rep, all_embed)
-
-    kendall, _ = kendalltau(v_ref_rep, all_embed)
-
-    cosine = np.dot(v_ref_rep, all_embed) / (
-        np.linalg.norm(v_ref_rep) * np.linalg.norm(all_embed)
-    )
-
-    metrics = {
-        "Pearson": pearson,
-        "Spearman": spearman,
-        "Kendall": kendall,
-        "Cosine": cosine,
-    }
-
-    # --- plot ---
-    fig, ax = plt.subplots(figsize=(6, 5))
-
-    names = list(metrics.keys())
-    values = list(metrics.values())
-
-    ax.bar(names, values)
-
-    mean_val = np.mean(values)
-    ax.axhline(float(mean_val), color="red", linestyle="--", linewidth=2, label=f"Mean = {mean_val:.3f}")
-
-    ax.set_ylim(-1, 1)
-    ax.set_ylabel("Similarity")
-    ax.set_title(f"Global Distance Similarity Metrics ({condition.upper()})")
-
-    ax.legend()
-    ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
-
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=300)
-    plt.close(fig)
-
-    print(f"Saved: {out_path}")
-
-
-# -------------------------------------------------
-# GLOBAL KRUSKAL STRESS + MANTEL CORRELATION
-# -------------------------------------------------
-
-def plot_global_stress_mantel(coords_list, condition, out_path):
-    """
-    Compute global Kruskal Stress-1 and Mantel correlation between
-    participant RDM distances and the consensus RDM.
-    Aggregated across all participants.
-    """
-
-    # distance matrices
-    D_mats = [squareform(pdist(c, metric="euclidean")) for c in coords_list]
-
-    # consensus matrix
-    D_consensus = np.mean(D_mats, axis=0)
-
-    # flatten consensus
-    v_ref = squareform(D_consensus, checks=False)
-
-    # flatten all participant distances
-    all_embed = []
-    for D in D_mats:
-        v = squareform(D, checks=False)
-        all_embed.extend(v)
-
-    all_embed = np.asarray(all_embed)
-
-    # repeat reference vector
-    v_ref_rep = np.tile(v_ref, len(coords_list))
-
-    # --- Mantel correlation (Pearson between distance vectors) ---
-    mantel_r = np.corrcoef(v_ref_rep, all_embed)[0, 1]
-
-    # --- Kruskal Stress-1 ---
-    stress = np.sqrt(
-        np.sum((all_embed - v_ref_rep) ** 2) / np.sum(v_ref_rep ** 2)
-    )
-
-    # plot
-    fig, ax = plt.subplots(figsize=(6, 5))
-
-    names = ["Mantel r", "Kruskal Stress"]
-    values = [mantel_r, stress]
-
-    ax.bar(names, values)
-
-    ax.set_title(f"Global Structural Metrics ({condition.upper()})")
-    ax.set_ylabel("Value")
-
-    ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
-
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=300)
-    plt.close(fig)
-
-    print(f"Saved: {out_path}")
-
-
-# -------------------------------------------------
-# CORRELATION SCATTERPLOTS (GLOBAL)
-# -------------------------------------------------
-
-def plot_correlation_scatter_metrics(coords_list, condition, out_path):
-    """
-    Scatterplots for Pearson, Spearman, and Kendall correlations between
-    participant RDM distances and the consensus RDM distances.
-    Aggregated across all participants (global).
-    """
-
-    # compute distance matrices
-    D_mats = [squareform(pdist(c, metric="euclidean")) for c in coords_list]
-
-    # consensus matrix
-    D_consensus = np.mean(D_mats, axis=0)
-
-    # flatten consensus
-    v_ref = squareform(D_consensus, checks=False)
-
-    # flatten all participant distances
-    all_embed = []
-    for D in D_mats:
-        v = squareform(D, checks=False)
-        all_embed.extend(v)
-
-    all_embed = np.asarray(all_embed)
-
-    # repeat reference
-    v_ref_rep = np.tile(v_ref, len(coords_list))
-
-    # compute ranks for rank-based correlations
-    ref_rank = np.argsort(np.argsort(v_ref_rep))
-    emb_rank = np.argsort(np.argsort(all_embed))
-
-    # prepare filenames
-    base = Path(out_path)
-    pearson_path = base.with_name(base.stem + "_pearson.png")
-    spearman_path = base.with_name(base.stem + "_spearman.png")
-    kendall_path = base.with_name(base.stem + "_kendall.png")
-
-    # -------------------------------------------------
-    # PEARSON SCATTER
-    # -------------------------------------------------
-    fig, ax = plt.subplots(figsize=(6,6))
-
-    ax.scatter(v_ref_rep, all_embed, alpha=0.35, s=18)
-
-    # perfect reconstruction line (y = x)
-    min_v = min(v_ref_rep.min(), all_embed.min())
-    max_v = max(v_ref_rep.max(), all_embed.max())
-    ax.plot(
-        [min_v, max_v],
-        [min_v, max_v],
-        linestyle="--",
-        linewidth=2,
-        label="Perfect reconstruction"
-    )
-
-    # regression line
-    m, b = np.polyfit(v_ref_rep, all_embed, 1)
-    x_line = np.linspace(v_ref_rep.min(), v_ref_rep.max(), 200)
-    y_line = m * x_line + b
-    ax.plot(x_line, y_line, linewidth=3, label="Regression trend")
-
-    r = np.corrcoef(v_ref_rep, all_embed)[0,1]
-
-    ax.set_title(f"Pearson Correlation ({condition.upper()})  r={r:.3f}")
-    ax.set_xlabel("Consensus distance")
-    ax.set_ylabel("Participant distance")
-    ax.grid(True, linestyle=":", linewidth=0.6)
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(pearson_path, dpi=300)
-    plt.close(fig)
-
-    print(f"Saved: {pearson_path}")
-
-    # -------------------------------------------------
-    # SPEARMAN SCATTER
-    # -------------------------------------------------
-    fig, ax = plt.subplots(figsize=(6,6))
-
-    ax.scatter(ref_rank, emb_rank, alpha=0.35, s=18)
-
-    # perfect reconstruction line (rank agreement)
-    min_v = min(ref_rank.min(), emb_rank.min())
-    max_v = max(ref_rank.max(), emb_rank.max())
-    ax.plot(
-        [min_v, max_v],
-        [min_v, max_v],
-        linestyle="--",
-        linewidth=2,
-        label="Perfect reconstruction"
-    )
-
-    # regression line
-    m, b = np.polyfit(ref_rank, emb_rank, 1)
-    x_line = np.linspace(ref_rank.min(), ref_rank.max(), 200)
-    y_line = m * x_line + b
-    ax.plot(x_line, y_line, linewidth=3, label="Regression trend")
-
-    rho, _ = spearmanr(v_ref_rep, all_embed)
-
-    ax.set_title(f"Spearman Correlation ({condition.upper()})  ρ={rho:.3f}")
-    ax.set_xlabel("Consensus rank")
-    ax.set_ylabel("Participant rank")
-    ax.grid(True, linestyle=":", linewidth=0.6)
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(spearman_path, dpi=300)
-    plt.close(fig)
-
-    print(f"Saved: {spearman_path}")
-
-    # -------------------------------------------------
-    # KENDALL SCATTER
-    # -------------------------------------------------
-    fig, ax = plt.subplots(figsize=(6,6))
-
-    ax.scatter(ref_rank, emb_rank, alpha=0.35, s=18)
-
-    # perfect reconstruction line (rank agreement)
-    min_v = min(ref_rank.min(), emb_rank.min())
-    max_v = max(ref_rank.max(), emb_rank.max())
-    ax.plot(
-        [min_v, max_v],
-        [min_v, max_v],
-        linestyle="--",
-        linewidth=2,
-        label="Perfect reconstruction"
-    )
-
-    # regression line
-    m, b = np.polyfit(ref_rank, emb_rank, 1)
-    x_line = np.linspace(ref_rank.min(), ref_rank.max(), 200)
-    y_line = m * x_line + b
-    ax.plot(x_line, y_line, linewidth=3, label="Regression trend")
-
-    tau, _ = kendalltau(v_ref_rep, all_embed)
-
-    ax.set_title(f"Kendall Correlation ({condition.upper()})  τ={tau:.3f}")
-    ax.set_xlabel("Consensus rank")
-    ax.set_ylabel("Participant rank")
-    ax.grid(True, linestyle=":", linewidth=0.6)
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(kendall_path, dpi=300)
-    plt.close(fig)
-
-    print(f"Saved: {kendall_path}")
 
 
 def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, condition, out_path):
@@ -733,12 +640,27 @@ def main():
     embeddings_2d = []  # list of (participant_name, names, coords)
     embeddings_3d = []
     
+    # Output directories for per-participant arrangement plots
+    ARRANGEMENTS_DIR = ANALYSIS_DIR / "arrangements"
+    ARR_2D_DIR = ARRANGEMENTS_DIR / "2d"
+    ARR_3D_DIR = ARRANGEMENTS_DIR / "3d"
+    ARRANGEMENTS_DIR.mkdir(exist_ok=True)
+    ARR_2D_DIR.mkdir(exist_ok=True)
+    ARR_3D_DIR.mkdir(exist_ok=True)
+
+    participant_index = 0
+    
     # Iterate through all participant folders in final_results
-    for participant_dir in FINAL_RESULTS_DIR.iterdir():
+    for participant_dir in sorted(FINAL_RESULTS_DIR.iterdir()):
         if not participant_dir.is_dir() or participant_dir.name.startswith('.'):
             continue
         
         participant_name = participant_dir.name
+        participant_index += 1
+        if ANONYMOUS:
+            participant_label = f"Participant {participant_index}"
+        else:
+            participant_label = participant_name
         
         for cond in ("2d", "3d"):
             cond_dir = participant_dir / cond
@@ -754,8 +676,14 @@ def main():
                 if len(coords) >= 2:
                     if cond == "2d":
                         embeddings_2d.append((participant_name, names, coords))
+                        # Per-participant 2D scatter
+                        arr_path = ARR_2D_DIR / f"{participant_label.replace(' ', '_')}_2d.png"
+                        plot_participant_arrangement_2d(names, coords, participant_label, arr_path)
                     else:
                         embeddings_3d.append((participant_name, names, coords))
+                        # Per-participant 3D cube
+                        arr_path = ARR_3D_DIR / f"{participant_label.replace(' ', '_')}_3d.png"
+                        plot_participant_arrangement_3d(names, coords, participant_label, arr_path)
     
     # Procrustes analysis for 2D condition
     if len(embeddings_2d) >= 2:
@@ -794,18 +722,12 @@ def main():
 
         # axis variance
         axis_path = PROCRUSTES_2D_DIR / "axis_variance_2d.png"
-        plot_axis_variance(coords_list_2d, "2d", axis_path)
+        plot_axis_variance(coords_list_2d, "2d", axis_path, participant_names_2d)
 
-        # global similarity metrics
-        metrics_path = PROCRUSTES_2D_DIR / "distance_similarity_metrics_2d.png"
-        plot_global_similarity_metrics(coords_list_2d, "2d", metrics_path)
-        # correlation scatterplots
-        scatter_path = PROCRUSTES_2D_DIR / "distance_correlation_scatter_2d.png"
-        plot_correlation_scatter_metrics(coords_list_2d, "2d", scatter_path)
-
-        # Kruskal stress + Mantel correlation
-        stress_mantel_path = PROCRUSTES_2D_DIR / "global_stress_mantel_2d.png"
-        plot_global_stress_mantel(coords_list_2d, "2d", stress_mantel_path)
+        # Overall Procrustes arrangement (2D)
+        proc_arr_path_2d = PROCRUSTES_2D_DIR / "procrustes_arrangement_2d.png"
+        plot_procrustes_arrangement_2d(aligned_2d, mean_shape_2d, participant_names_2d,
+                                       embeddings_2d[0][1], proc_arr_path_2d)
     
     # Procrustes analysis for 3D condition
     if len(embeddings_3d) >= 2:
@@ -844,18 +766,17 @@ def main():
 
         # axis variance
         axis_path = PROCRUSTES_3D_DIR / "axis_variance_3d.png"
-        plot_axis_variance(coords_list_3d, "3d", axis_path)
+        plot_axis_variance(coords_list_3d, "3d", axis_path, participant_names_3d)
 
-        # global similarity metrics
-        metrics_path = PROCRUSTES_3D_DIR / "distance_similarity_metrics_3d.png"
-        plot_global_similarity_metrics(coords_list_3d, "3d", metrics_path)
-        # correlation scatterplots
-        scatter_path = PROCRUSTES_3D_DIR / "distance_correlation_scatter_3d.png"
-        plot_correlation_scatter_metrics(coords_list_3d, "3d", scatter_path)
+        # Overall Procrustes arrangement (3D)
+        proc_arr_path_3d = PROCRUSTES_3D_DIR / "procrustes_arrangement_3d.png"
+        plot_procrustes_arrangement_3d(aligned_3d, mean_shape_3d, participant_names_3d,
+                                       embeddings_3d[0][1], proc_arr_path_3d)
 
-        # Kruskal stress + Mantel correlation
-        stress_mantel_path = PROCRUSTES_3D_DIR / "global_stress_mantel_3d.png"
-        plot_global_stress_mantel(coords_list_3d, "3d", stress_mantel_path)
+    # Combined kNN plot (2D vs 3D)
+    if len(embeddings_2d) >= 2 and len(embeddings_3d) >= 2:
+        knn_combined_path = PROCRUSTES_DIR / "knn_preservation_2d_vs_3d.png"
+        plot_knn_combined(coords_list_2d, coords_list_3d, knn_combined_path) #type: ignore
 
 
 if __name__ == "__main__":
