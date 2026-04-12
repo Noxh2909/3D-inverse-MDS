@@ -1,4 +1,5 @@
 import csv
+from typing import Any, cast
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
@@ -6,6 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D, proj3d
 from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from scipy.spatial import procrustes
+from scipy.stats import spearmanr
 from PIL import Image
 
 
@@ -34,6 +36,11 @@ PROCRUSTES_3D_DIR.mkdir(exist_ok=True)
 # Set to True for anonymous participant labels (Participant 1, 2, 3...)
 # Set to False to use actual folder names
 ANONYMOUS = True
+
+# Restrict detailed Procrustes-style analysis to specific participant indices.
+# Example: [1, 2] will generate analysis/detailed/... for Participant 1 and 2 only.
+# Leave empty to skip detailed subset analysis.
+PARTICIPANTS = []
 
 
 # -------------------------------------------------
@@ -634,25 +641,30 @@ def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, conditi
     # compute mean disparity (ignore diagonal zeros)
     mask = ~np.eye(n, dtype=bool)
     mean_disp = np.mean(D[mask])
+    max_disp = np.max(D[mask]) if np.any(mask) else 0.0
+    if max_disp > 0:
+        D_normalized = D / max_disp
+    else:
+        D_normalized = D.copy()
     
     # Plot matrix
     fig, ax = plt.subplots(figsize=(max(8, n * 0.8), max(8, n * 0.8)))
     lower_triangle_mask = np.triu(np.ones_like(D, dtype=bool), k=1)
-    masked_D = np.ma.array(D, mask=lower_triangle_mask)
+    masked_D = np.ma.array(D_normalized, mask=lower_triangle_mask)
     cmap = plt.cm.get_cmap("viridis").copy()
     cmap.set_bad(color="white", alpha=0)
 
-    im = ax.imshow(masked_D, cmap=cmap)
+    im = ax.imshow(masked_D, cmap=cmap, vmin=0, vmax=1)
     
     # Add values inside cells
     for i in range(n):
         for j in range(i + 1):
             ax.text(
                 j, i,
-                f"{D[i, j]:.3f}",
+                f"{D_normalized[i, j]:.3f}",
                 ha="center",
                 va="center",
-                color="white" if D[i, j] > D.max() * 0.5 else "black",
+                color="white" if D_normalized[i, j] > 0.5 else "black",
                 fontsize=8
             )
     
@@ -660,14 +672,136 @@ def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, conditi
     ax.set_yticks(np.arange(n))
     ax.set_xticklabels(participant_names, rotation=45, ha='right')
     ax.set_yticklabels(participant_names)
+    ax.set_xlim(-0.5, n - 0.5)
+    ax.set_ylim(n - 0.5, -0.5)
     
-    plt.colorbar(im, fraction=0.046, pad=0.04)
-    plt.title(f"Procrustes Dissimilarity Matrix - {condition.upper()}  (Mean disparity = {mean_disp:.4f})")
+    plt.colorbar(im, fraction=0.046, pad=0.04, label="Normalized disparity")
+    plt.title(
+        f"Procrustes Dissimilarity Matrix - {condition.upper()}  "
+        f"(Mean disparity = {mean_disp:.4f})"
+    )
     
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")
+
+
+def plot_spearman_consistency_heatmap(coords_list, participant_names, condition, out_path):
+    """Plot a Spearman correlation heatmap between participants based on pairwise distances."""
+    n = len(coords_list)
+    correlation_matrix = np.ones((n, n))
+    distance_vectors = [squareform(pdist(coords, metric="euclidean"), checks=False)
+                        for coords in coords_list]
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            spearman_result = spearmanr(
+                np.ravel(distance_vectors[i]),
+                np.ravel(distance_vectors[j]),
+            )
+            rho_value = getattr(cast(Any, spearman_result), "statistic", spearman_result[0])
+            rho_array = np.asarray(rho_value)
+            if rho_array.ndim == 0:
+                rho = float(rho_array)
+            elif rho_array.shape == (2, 2):
+                rho = float(rho_array[0, 1])
+            else:
+                rho = float(rho_array.reshape(-1)[0])
+            if np.isnan(rho):
+                rho = 0.0
+            correlation_matrix[i, j] = rho
+            correlation_matrix[j, i] = rho
+
+    mean_rho = np.mean(correlation_matrix[~np.eye(n, dtype=bool)])
+
+    fig, ax = plt.subplots(figsize=(max(8, n * 0.8), max(8, n * 0.8)))
+    lower_triangle_mask = np.triu(np.ones_like(correlation_matrix, dtype=bool), k=1)
+    masked_correlation = np.ma.array(correlation_matrix, mask=lower_triangle_mask)
+    cmap = plt.cm.get_cmap("coolwarm").copy()
+    cmap.set_bad(color="white", alpha=0)
+    im = ax.imshow(masked_correlation, cmap=cmap, vmin=-1, vmax=1)
+
+    for i in range(n):
+        for j in range(i + 1):
+            value = correlation_matrix[i, j]
+            ax.text(
+                j, i,
+                f"{value:.3f}",
+                ha="center",
+                va="center",
+                color="white" if abs(value) > 0.5 else "black",
+                fontsize=8,
+            )
+
+    ax.set_xticks(np.arange(n))
+    ax.set_yticks(np.arange(n))
+    ax.set_xticklabels(participant_names, rotation=45, ha="right")
+    ax.set_yticklabels(participant_names)
+    ax.set_xlim(-0.5, n - 0.5)
+    ax.set_ylim(n - 0.5, -0.5)
+
+    plt.colorbar(im, fraction=0.046, pad=0.04, label="Spearman rho")
+    plt.title(
+        f"Spearman Intersubject Consistency - {condition.upper()}  "
+        f"(Mean rho = {mean_rho:.4f})"
+    )
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def run_condition_analysis(embeddings, condition, out_dir, title_suffix=""):
+    """Run the aggregated analysis suite for one condition."""
+    if len(embeddings) < 2:
+        return
+
+    print(f"\n--- Procrustes Analysis for {condition.upper()}{title_suffix} ---")
+
+    coords_list = [embedding[4] for embedding in embeddings]
+    stimulus_names = embeddings[0][3]
+
+    if ANONYMOUS:
+        participant_names = [f"Participant {embedding[0]}" for embedding in embeddings]
+    else:
+        participant_names = [embedding[1] for embedding in embeddings]
+
+    mean_shape, aligned = generalized_procrustes_analysis(coords_list)
+
+    disparities = []
+    for aligned_coords in aligned:
+        disp = compute_procrustes_distance(mean_shape, aligned_coords)
+        disparities.append(disp)
+
+    consistency_path = out_dir / f"intersubject_consistency_{condition}.png"
+    plot_intersubject_consistency(disparities, participant_names, condition, consistency_path)
+
+    dissim_path = out_dir / f"procrustes_dissimilarity_matrix_{condition}.png"
+    plot_procrustes_dissimilarity_matrix(coords_list, participant_names, condition, dissim_path)
+
+    spearman_path = out_dir / f"spearman_consistency_heatmap_{condition}.png"
+    plot_spearman_consistency_heatmap(coords_list, participant_names, condition, spearman_path)
+
+    print(f"Mean disparity {condition.upper()}{title_suffix}: {np.mean(disparities):.4f}")
+
+    shepard_path = out_dir / f"shepard_{condition}.png"
+    plot_shepard_global(coords_list, stimulus_names, condition, shepard_path)
+
+    knn_path = out_dir / f"knn_preservation_{condition}.png"
+    plot_knn_curve(coords_list, condition, knn_path)
+
+    axis_path = out_dir / f"axis_variance_{condition}.png"
+    plot_axis_variance(coords_list, condition, axis_path, participant_names)
+
+    proc_arr_path = out_dir / f"procrustes_arrangement_{condition}.png"
+    if condition == "2d":
+        plot_procrustes_arrangement_2d(aligned, mean_shape, participant_names,
+                                       stimulus_names, proc_arr_path)
+    else:
+        plot_procrustes_arrangement_3d(aligned, mean_shape, participant_names,
+                                       stimulus_names, proc_arr_path)
 
 
 def main(): 
@@ -679,9 +813,15 @@ def main():
     ARRANGEMENTS_DIR = ANALYSIS_DIR / "arrangements"
     ARR_2D_DIR = ARRANGEMENTS_DIR / "2d"
     ARR_3D_DIR = ARRANGEMENTS_DIR / "3d"
+    DETAILED_DIR = ANALYSIS_DIR / "detailed"
+    DETAILED_2D_DIR = DETAILED_DIR / "2d"
+    DETAILED_3D_DIR = DETAILED_DIR / "3d"
     ARRANGEMENTS_DIR.mkdir(exist_ok=True)
     ARR_2D_DIR.mkdir(exist_ok=True)
     ARR_3D_DIR.mkdir(exist_ok=True)
+    DETAILED_DIR.mkdir(exist_ok=True)
+    DETAILED_2D_DIR.mkdir(exist_ok=True)
+    DETAILED_3D_DIR.mkdir(exist_ok=True)
 
     participant_index = 0
     
@@ -710,108 +850,39 @@ def main():
                 names, coords = load_embedding(csv_file)
                 if len(coords) >= 2:
                     if cond == "2d":
-                        embeddings_2d.append((participant_name, names, coords))
+                        embeddings_2d.append((participant_index, participant_name,
+                                              participant_label, names, coords))
                         # Per-participant 2D scatter
                         arr_path = ARR_2D_DIR / f"{participant_label.replace(' ', '_')}_2d.png"
                         plot_participant_arrangement_2d(names, coords, participant_label, arr_path)
                     else:
-                        embeddings_3d.append((participant_name, names, coords))
+                        embeddings_3d.append((participant_index, participant_name,
+                                              participant_label, names, coords))
                         # Per-participant 3D cube
                         arr_path = ARR_3D_DIR / f"{participant_label.replace(' ', '_')}_3d.png"
                         plot_participant_arrangement_3d(names, coords, participant_label, arr_path)
-    
-    # Procrustes analysis for 2D condition
-    if len(embeddings_2d) >= 2:
-        print("\n--- Procrustes Analysis for 2D ---")
-        coords_list_2d = [e[2] for e in embeddings_2d]
-        if ANONYMOUS:
-            participant_names_2d = [f"Participant {i+1}" for i in range(len(embeddings_2d))]
-        else:
-            participant_names_2d = [e[0] for e in embeddings_2d]
-        
-        mean_shape_2d, aligned_2d = generalized_procrustes_analysis(coords_list_2d)
-        
-        # Compute disparity of each participant to mean
-        disparities_2d = []
-        for aligned_coords in aligned_2d:
-            disp = compute_procrustes_distance(mean_shape_2d, aligned_coords)
-            disparities_2d.append(disp)
-        
-        # Plot intersubject consistency
-        consistency_path_2d = PROCRUSTES_2D_DIR / "intersubject_consistency_2d.png"
-        plot_intersubject_consistency(disparities_2d, participant_names_2d, "2d", consistency_path_2d)
-        
-        # Plot Procrustes dissimilarity matrix
-        dissim_path_2d = PROCRUSTES_2D_DIR / "procrustes_dissimilarity_matrix_2d.png"
-        plot_procrustes_dissimilarity_matrix(coords_list_2d, participant_names_2d, "2d", dissim_path_2d)
-        
-        print(f"Mean disparity 2D: {np.mean(disparities_2d):.4f}")
 
-        # Shepard diagram
-        shepard_path = PROCRUSTES_2D_DIR / "shepard_2d.png"
-        plot_shepard_global(coords_list_2d, embeddings_2d[0][1], "2d", shepard_path)
+    run_condition_analysis(embeddings_2d, "2d", PROCRUSTES_2D_DIR)
+    run_condition_analysis(embeddings_3d, "3d", PROCRUSTES_3D_DIR)
 
-        # kNN curve
-        knn_path = PROCRUSTES_2D_DIR / "knn_preservation_2d.png"
-        plot_knn_curve(coords_list_2d, "2d", knn_path)
+    selected_participants = set(PARTICIPANTS)
+    if selected_participants:
+        detailed_embeddings_2d = [embedding for embedding in embeddings_2d
+                                  if embedding[0] in selected_participants]
+        detailed_embeddings_3d = [embedding for embedding in embeddings_3d
+                                  if embedding[0] in selected_participants]
 
-        # axis variance
-        axis_path = PROCRUSTES_2D_DIR / "axis_variance_2d.png"
-        plot_axis_variance(coords_list_2d, "2d", axis_path, participant_names_2d)
-
-        # Overall Procrustes arrangement (2D)
-        proc_arr_path_2d = PROCRUSTES_2D_DIR / "procrustes_arrangement_2d.png"
-        plot_procrustes_arrangement_2d(aligned_2d, mean_shape_2d, participant_names_2d,
-                                       embeddings_2d[0][1], proc_arr_path_2d)
-    
-    # Procrustes analysis for 3D condition
-    if len(embeddings_3d) >= 2:
-        print("\n--- Procrustes Analysis for 3D ---")
-        coords_list_3d = [e[2] for e in embeddings_3d]
-        if ANONYMOUS:
-            participant_names_3d = [f"Participant {i+1}" for i in range(len(embeddings_3d))]
-        else:
-            participant_names_3d = [e[0] for e in embeddings_3d]
-        
-        mean_shape_3d, aligned_3d = generalized_procrustes_analysis(coords_list_3d)
-        
-        # Compute disparity of each participant to mean
-        disparities_3d = []
-        for aligned_coords in aligned_3d:
-            disp = compute_procrustes_distance(mean_shape_3d, aligned_coords)
-            disparities_3d.append(disp)
-        
-        # Plot intersubject consistency
-        consistency_path_3d = PROCRUSTES_3D_DIR / "intersubject_consistency_3d.png"
-        plot_intersubject_consistency(disparities_3d, participant_names_3d, "3d", consistency_path_3d)
-        
-        # Plot Procrustes dissimilarity matrix
-        dissim_path_3d = PROCRUSTES_3D_DIR / "procrustes_dissimilarity_matrix_3d.png"
-        plot_procrustes_dissimilarity_matrix(coords_list_3d, participant_names_3d, "3d", dissim_path_3d)
-        
-        print(f"Mean disparity 3D: {np.mean(disparities_3d):.4f}")
-
-        # Shepard diagram
-        shepard_path = PROCRUSTES_3D_DIR / "shepard_3d.png"
-        plot_shepard_global(coords_list_3d, embeddings_3d[0][1], "3d", shepard_path)
-
-        # kNN curve
-        knn_path = PROCRUSTES_3D_DIR / "knn_preservation_3d.png"
-        plot_knn_curve(coords_list_3d, "3d", knn_path)
-
-        # axis variance
-        axis_path = PROCRUSTES_3D_DIR / "axis_variance_3d.png"
-        plot_axis_variance(coords_list_3d, "3d", axis_path, participant_names_3d)
-
-        # Overall Procrustes arrangement (3D)
-        proc_arr_path_3d = PROCRUSTES_3D_DIR / "procrustes_arrangement_3d.png"
-        plot_procrustes_arrangement_3d(aligned_3d, mean_shape_3d, participant_names_3d,
-                                       embeddings_3d[0][1], proc_arr_path_3d)
+        run_condition_analysis(detailed_embeddings_2d, "2d", DETAILED_2D_DIR,
+                               title_suffix=" (Detailed)")
+        run_condition_analysis(detailed_embeddings_3d, "3d", DETAILED_3D_DIR,
+                               title_suffix=" (Detailed)")
 
     # Combined kNN plot (2D vs 3D)
     if len(embeddings_2d) >= 2 and len(embeddings_3d) >= 2:
+        coords_list_2d = [embedding[4] for embedding in embeddings_2d]
+        coords_list_3d = [embedding[4] for embedding in embeddings_3d]
         knn_combined_path = PROCRUSTES_DIR / "knn_preservation_2d_vs_3d.png"
-        plot_knn_combined(coords_list_2d, coords_list_3d, knn_combined_path) #type: ignore
+        plot_knn_combined(coords_list_2d, coords_list_3d, knn_combined_path)
 
 
 if __name__ == "__main__":
