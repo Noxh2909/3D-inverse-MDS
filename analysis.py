@@ -55,7 +55,7 @@ STIMULUS_BORDER_COLORS = {
 # Restrict detailed Procrustes-style analysis to specific participant indices.
 # Example: [1, 2] will generate analysis/detailed/... for Participant 1 and 2 only.
 # Leave empty to skip detailed subset analysis.
-PARTICIPANTS = []
+PARTICIPANTS = [4,7]
 
 
 # -------------------------------------------------
@@ -126,16 +126,19 @@ def create_stimulus_image(name, zoom=0.35, border_width=5):
     return load_image(name, zoom=zoom, bordered=True, border_width=border_width)
 
 
-def _stimulus_size_points(name, zoom, border_width):
+def _stimulus_size_pixels(name, border_width):
     path = PICTURES_DIR / name
     if not path.exists():
-        return 42.0 * zoom, 42.0 * zoom
+        return 42 + 2 * border_width, 42 + 2 * border_width
 
     with Image.open(path) as image:
         width, height = image.size
 
-    width += 2 * border_width
-    height += 2 * border_width
+    return width + 2 * border_width, height + 2 * border_width
+
+
+def _stimulus_size_points(name, zoom, border_width):
+    width, height = _stimulus_size_pixels(name, border_width)
     return width * zoom, height * zoom
 
 
@@ -501,6 +504,7 @@ def plot_procrustes_arrangement_3d(aligned_list, mean_shape, participant_names,
 def plot_dissimilarity_matrix(names, D, csv_name, out_dir):
     n = len(names)
     fig, ax = plt.subplots(figsize=(1.2 * n, 1.2 * n))
+    axis_border_width = 6
 
     lower_triangle_mask = np.triu(np.ones_like(D, dtype=bool), k=1)
     masked_D = np.ma.array(D, mask=lower_triangle_mask)
@@ -510,6 +514,21 @@ def plot_dissimilarity_matrix(names, D, csv_name, out_dir):
     im = ax.imshow(masked_D, cmap=cmap)
     ax.set_xticks([])
     ax.set_yticks([])
+    ax.set_xlim(-0.5, n - 0.5)
+    ax.set_ylim(n - 0.5, -0.5)
+
+    plt.colorbar(im, fraction=0.046, pad=0.04)
+    plt.title("Dissimilarity Matrix (Euclidean Distance)")
+    fig.canvas.draw()
+
+    origin = np.asarray(ax.transData.transform((0, 0)), dtype=float)
+    step_x = np.asarray(ax.transData.transform((1, 0)), dtype=float)
+    step_y = np.asarray(ax.transData.transform((0, 1)), dtype=float)
+    cell_width_px = abs(step_x[0] - origin[0])
+    cell_height_px = abs(step_y[1] - origin[1])
+    target_cell_px = 0.30 * min(cell_width_px, cell_height_px)
+    x_axis_transform = ax.get_xaxis_transform()
+    y_axis_transform = ax.get_yaxis_transform()
 
     # --- values inside cells ---
     for i in range(n):
@@ -525,37 +544,63 @@ def plot_dissimilarity_matrix(names, D, csv_name, out_dir):
 
     # --- image ticks ---
     for i, name in enumerate(names):
-        img_x = load_image(name)
-        img_y = load_image(name)
+        stim_width_px, stim_height_px = _stimulus_size_pixels(name, axis_border_width)
+        axis_image_zoom = min(target_cell_px / stim_width_px, target_cell_px / stim_height_px)
+        img_x = create_stimulus_image(name, zoom=axis_image_zoom,
+                                      border_width=axis_border_width)
+        img_y = create_stimulus_image(name, zoom=axis_image_zoom,
+                                      border_width=axis_border_width)
         if img_x is None:
             continue
+
+        stimulus_label = _stimulus_label(name)
 
         # X axis
         ab_x = AnnotationBbox(
             img_x,
-            (i, n - 0.1),
-            xycoords="data",
+            (i, -0.015),
+            xycoords=x_axis_transform,
             frameon=False,
-            box_alignment=(0.5, 0)
+            box_alignment=(0.5, 1.0),
+            annotation_clip=False,
         )
         ax.add_artist(ab_x)
+        ax.text(
+            i,
+            -0.1,
+            stimulus_label,
+            transform=x_axis_transform,
+            ha="center",
+            va="top",
+            fontsize=10,
+            fontweight="bold",
+            color="black",
+            clip_on=False,
+        )
 
         # Y axis
         if img_y is not None:
             ab_y = AnnotationBbox(
                 img_y,
-                (-0.6, i),
-                xycoords="data",
+                (-0.015, i),
+                xycoords=y_axis_transform,
                 frameon=False,
-                box_alignment=(1, 0.5)
+                box_alignment=(1, 0.5),
+                annotation_clip=False,
             )
             ax.add_artist(ab_y)
-
-    ax.set_xlim(-1, n - 0.5)
-    ax.set_ylim(n + 0.1, -1)
-
-    plt.colorbar(im, fraction=0.046, pad=0.04)
-    plt.title("Dissimilarity Matrix (Euclidean Distance)")
+            ax.text(
+                -0.1,
+                i,
+                stimulus_label,
+                transform=y_axis_transform,
+                ha="right",
+                va="center",
+                fontsize=10,
+                fontweight="bold",
+                color="black",
+                clip_on=False,
+            )
 
     out = out_dir / f"{csv_name}.png"
     plt.savefig(out, dpi=200, bbox_inches="tight")
