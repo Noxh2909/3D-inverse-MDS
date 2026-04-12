@@ -8,7 +8,7 @@ from pathlib import Path
 from scipy.spatial.distance import pdist, squareform
 from scipy.spatial import procrustes
 from scipy.stats import spearmanr
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 # -------------------------------------------------
@@ -36,6 +36,21 @@ PROCRUSTES_3D_DIR.mkdir(exist_ok=True)
 # Set to True for anonymous participant labels (Participant 1, 2, 3...)
 # Set to False to use actual folder names
 ANONYMOUS = True
+
+STIMULUS_BORDER_COLORS = {
+    1: "#6929c4",
+    2: "#1192e8",
+    3: "#005d5d",
+    4: "#9f1853",
+    5: "#fa4d56",
+    6: "#570408",
+    7: "#198038",
+    8: "#002d9c",
+    9: "#ee538b",
+    10: "#b28600",
+    11: "#009d9a",
+    12: "#012749",
+}
 
 # Restrict detailed Procrustes-style analysis to specific participant indices.
 # Example: [1, 2] will generate analysis/detailed/... for Participant 1 and 2 only.
@@ -71,37 +86,261 @@ def load_embedding(csv_path):
 # IMAGE HELPERS
 # -------------------------------------------------
 
-def load_image(name, zoom=0.35):
+def _stimulus_index(name):
+    stem = Path(name).stem.replace("Stimuli_", "")
+    try:
+        return int(stem) + 1
+    except ValueError:
+        return None
+
+
+def _stimulus_label(name):
+    """Convert e.g. 'Stimuli_00.png' -> '01' (1-based)."""
+    stimulus_index = _stimulus_index(name)
+    if stimulus_index is None:
+        return Path(name).stem
+    return f"{stimulus_index:02d}"
+
+
+def _add_stimulus_border(image, name, border_width=10):
+    stimulus_index = _stimulus_index(name)
+    if stimulus_index is None:
+        border_color = "#000000"
+    else:
+        border_color = STIMULUS_BORDER_COLORS.get(stimulus_index, "#000000")
+    return ImageOps.expand(image, border=border_width, fill=border_color)
+
+
+def load_image(name, zoom=0.35, bordered=False, border_width=5):
     path = PICTURES_DIR / name
     if not path.exists():
         return None
-    img = Image.open(path)
+    img = Image.open(path).convert("RGBA")
+    if bordered:
+        img = _add_stimulus_border(img, name, border_width=border_width)
     arr = np.asarray(img)
     return OffsetImage(arr, zoom=zoom)
 
 
-def add_projected_images_3d(ax, names, coords, zoom=0.12):
-    """Project image thumbnails onto a 3D axes for static export."""
+def create_stimulus_image(name, zoom=0.35, border_width=5):
+    return load_image(name, zoom=zoom, bordered=True, border_width=border_width)
+
+
+def _stimulus_size_points(name, zoom, border_width):
+    path = PICTURES_DIR / name
+    if not path.exists():
+        return 42.0 * zoom, 42.0 * zoom
+
+    with Image.open(path) as image:
+        width, height = image.size
+
+    width += 2 * border_width
+    height += 2 * border_width
+    return width * zoom, height * zoom
+
+
+def _label_box_size_points(name, label_size):
+    label = _stimulus_label(name)
+    width = max(18.0, len(label) * label_size * 0.72 + 6.0)
+    height = label_size + 6.0
+    return width, height
+
+
+def _pixels_to_points(fig, values):
+    return np.asarray(values, dtype=float) * (72.0 / fig.dpi)
+
+
+def _rect_from_center(center_x, center_y, width, height):
+    half_width = width / 2.0
+    half_height = height / 2.0
+    return (
+        center_x - half_width,
+        center_y - half_height,
+        center_x + half_width,
+        center_y + half_height,
+    )
+
+
+def _rect_from_anchor(anchor_x, anchor_y, width, height, ha, va):
+    if ha == "center":
+        x_min = anchor_x - width / 2.0
+        x_max = anchor_x + width / 2.0
+    elif ha == "left":
+        x_min = anchor_x
+        x_max = anchor_x + width
+    else:
+        x_min = anchor_x - width
+        x_max = anchor_x
+
+    if va == "center":
+        y_min = anchor_y - height / 2.0
+        y_max = anchor_y + height / 2.0
+    elif va == "bottom":
+        y_min = anchor_y
+        y_max = anchor_y + height
+    else:
+        y_min = anchor_y - height
+        y_max = anchor_y
+
+    return (x_min, y_min, x_max, y_max)
+
+
+def _rect_intersection_area(rect1, rect2, padding=0.0):
+    x_min = max(rect1[0] - padding, rect2[0] - padding)
+    y_min = max(rect1[1] - padding, rect2[1] - padding)
+    x_max = min(rect1[2] + padding, rect2[2] + padding)
+    y_max = min(rect1[3] + padding, rect2[3] + padding)
+
+    if x_max <= x_min or y_max <= y_min:
+        return 0.0
+    return (x_max - x_min) * (y_max - y_min)
+
+
+def _label_direction_offsets(image_width, image_height, gap=6.0):
+    half_width = image_width / 2.0
+    half_height = image_height / 2.0
+    return [
+        ((0.0, -(half_height + gap)), "center", "top"),
+        ((-(half_width + gap), 0.0), "right", "center"),
+        (((half_width + gap), 0.0), "left", "center"),
+        ((0.0, half_height + gap), "center", "bottom"),
+    ]
+
+
+def _candidate_label_rect(point, label_width, label_height, candidate):
+    offset, ha, va = candidate
+    anchor_x = point[0] + offset[0]
+    anchor_y = point[1] + offset[1]
+    return _rect_from_anchor(anchor_x, anchor_y, label_width, label_height, ha, va)
+
+
+def _candidate_penalty(candidate_rect, point_index, image_rects, placed_label_rects):
+    penalty = 0.0
+
+    for other_index, image_rect in enumerate(image_rects):
+        if other_index == point_index:
+            continue
+        penalty += _rect_intersection_area(candidate_rect, image_rect, padding=2.0)
+
+    for label_rect in placed_label_rects:
+        penalty += 1.5 * _rect_intersection_area(candidate_rect, label_rect, padding=2.0)
+
+    return penalty
+
+
+def compute_label_placements(points, image_sizes, names, label_size=11):
+    """Place labels below by default and move them left, right, or above on collision."""
+    points = np.asarray(points, dtype=float)
+    if len(points) == 0:
+        return []
+    if len(points) == 1:
+        image_width, image_height = image_sizes[0]
+        offset, ha, va = _label_direction_offsets(image_width, image_height)[0]
+        return [(offset, ha, va)]
+
+    image_rects = [
+        _rect_from_center(point[0], point[1], image_width, image_height)
+        for point, (image_width, image_height) in zip(points, image_sizes)
+    ]
+
+    nearest_distances = []
+    for index, point in enumerate(points):
+        others = np.delete(points, index, axis=0)
+        distances = np.linalg.norm(others - point, axis=1)
+        nearest_distances.append(np.min(distances) if len(distances) else np.inf)
+
+    placements = [None] * len(points)
+    placed_label_rects = []
+
+    for index in np.argsort(nearest_distances):
+        point = points[index]
+        image_width, image_height = image_sizes[index]
+        label_width, label_height = _label_box_size_points(names[index], label_size)
+        candidates = _label_direction_offsets(image_width, image_height)
+        best_candidate = None
+        best_penalty = None
+
+        for candidate in candidates:
+            candidate_rect = _candidate_label_rect(point, label_width, label_height, candidate)
+            penalty = _candidate_penalty(candidate_rect, index, image_rects, placed_label_rects)
+
+            if penalty == 0.0:
+                best_candidate = candidate
+                best_penalty = penalty
+                break
+
+            if best_penalty is None or penalty < best_penalty:
+                best_candidate = candidate
+                best_penalty = penalty
+
+        placements[index] = best_candidate
+        placed_label_rects.append(
+            _candidate_label_rect(point, label_width, label_height, best_candidate)
+        )
+
+    return placements
+
+
+def add_stimulus_label(ax, x_coord, y_coord, name, placement, label_size=11):
+    offset, ha, va = placement
+    ax.annotate(
+        _stimulus_label(name),
+        (x_coord, y_coord),
+        xytext=offset,
+        textcoords="offset points",
+        ha=ha,
+        va=va,
+        fontsize=label_size,
+        fontweight="bold",
+        color="black",
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.85, "pad": 0.12},
+        zorder=12,
+        clip_on=False,
+    )
+
+
+def add_projected_stimuli_3d(ax, names, coords, zoom=0.12, border_width=5,
+                             label_size=11):
+    """Project stimulus thumbnails onto a 3D axes and place labels beside them."""
     fig = ax.figure
     fig.canvas.draw()
 
-    for name, (x_coord, y_coord, z_coord) in zip(names, coords):
-        image = load_image(name, zoom=zoom)
-        if image is None:
-            continue
+    projected_points = []
+    for x_coord, y_coord, z_coord in coords:
+        x_proj, y_proj, _ = proj3d.proj_transform(x_coord, y_coord, z_coord, ax.get_proj())
+        projected_points.append((x_proj, y_proj))
 
-        x_proj, y_proj, _ = proj3d.proj_transform(x_coord, y_coord, z_coord,
-                                                  ax.get_proj())
-        annotation = AnnotationBbox(
-            image,
-            (x_proj, y_proj),
-            xycoords="data",
-            frameon=False,
-            pad=0.0,
-            box_alignment=(0.5, 0.5),
-            zorder=10,
-        )
-        ax.add_artist(annotation)
+    projected_points = np.asarray(projected_points, dtype=float)
+    display_points = ax.transData.transform(projected_points)
+    display_points = _pixels_to_points(fig, display_points)
+    image_sizes = [_stimulus_size_points(name, zoom, border_width) for name in names]
+    label_placements = compute_label_placements(
+        display_points,
+        image_sizes,
+        names,
+        label_size=label_size,
+    )
+
+    for (name, (x_coord, y_coord, z_coord), (x_proj, y_proj), placement) in zip(
+        names,
+        coords,
+        projected_points,
+        label_placements,
+    ):
+        image = create_stimulus_image(name, zoom=zoom, border_width=border_width)
+        if image is not None:
+            annotation = AnnotationBbox(
+                image,
+                (x_proj, y_proj),
+                xycoords="data",
+                frameon=False,
+                pad=0.0,
+                box_alignment=(0.5, 0.5),
+                zorder=10,
+            )
+            ax.add_artist(annotation)
+
+        add_stimulus_label(ax, x_proj, y_proj, name, placement, label_size=label_size)
 
 
 def add_depth_guides_3d(ax, coords):
@@ -118,6 +357,38 @@ def remap_coords_for_3d_axes(coords):
     """Keep original 3D axis order."""
     return coords[:, [0, 1, 2]]
 
+
+def add_stimuli_2d(ax, names, x_coords, y_coords, zoom=0.20, border_width=5,
+                   label_size=11):
+    fig = ax.figure
+    fig.canvas.draw()
+
+    data_points = np.column_stack((x_coords, y_coords))
+    display_points = ax.transData.transform(data_points)
+    display_points = _pixels_to_points(fig, display_points)
+    image_sizes = [_stimulus_size_points(name, zoom, border_width) for name in names]
+    label_placements = compute_label_placements(
+        display_points,
+        image_sizes,
+        names,
+        label_size=label_size,
+    )
+
+    for x_coord, y_coord, name, placement in zip(x_coords, y_coords, names, label_placements):
+        image = create_stimulus_image(name, zoom=zoom, border_width=border_width)
+        if image is not None:
+            annotation = AnnotationBbox(
+                image,
+                (x_coord, y_coord),
+                frameon=False,
+                box_alignment=(0.5, 0.5),
+                pad=0.0,
+                zorder=5,
+            )
+            ax.add_artist(annotation)
+
+        add_stimulus_label(ax, x_coord, y_coord, name, placement, label_size=label_size)
+
 # -------------------------------------------------
 # PER-PARTICIPANT STIMULUS ARRANGEMENT (2D scatter / 3D cube)
 # -------------------------------------------------
@@ -128,19 +399,12 @@ def plot_participant_arrangement_2d(names, coords, participant_label, out_path):
     x, y = coords[:, 0], coords[:, 1]
     ax.scatter(x, y, alpha=0.0)  # invisible dots, images replace them
 
-    for i, name in enumerate(names):
-        img = load_image(name, zoom=0.20)
-        if img is not None:
-            ab = AnnotationBbox(img, (x[i], y[i]), frameon=False)
-            ax.add_artist(ab)
-        else:
-            ax.annotate(name, (x[i], y[i]), fontsize=7, ha="center")
-
-    pad = 0.15
+    pad = 0.22
     rx = x.max() - x.min() if x.max() != x.min() else 1
     ry = y.max() - y.min() if y.max() != y.min() else 1
     ax.set_xlim(x.min() - pad * rx, x.max() + pad * rx)
     ax.set_ylim(y.min() - pad * ry, y.max() + pad * ry)
+    add_stimuli_2d(ax, names, x, y, zoom=0.40, border_width=8, label_size=12)
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_title(f"Stimulus Arrangement 2D – {participant_label}")
@@ -150,17 +414,6 @@ def plot_participant_arrangement_2d(names, coords, participant_label, out_path):
     plt.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")
-
-
-def _stimulus_label(name):
-    """Convert e.g. 'Stimuli_00.png' -> 'S01' (1-based)."""
-    stem = name.replace(".png", "").replace("Stimuli_", "")
-    try:
-        return f"S{int(stem)+1:02d}"
-    except ValueError:
-        return stem
-
-
 def plot_participant_arrangement_3d(names, coords, participant_label, out_path):
     """3D cube scatter of stimuli as placed by one participant, with images."""
     fig = plt.figure(figsize=(11, 10))
@@ -173,7 +426,8 @@ def plot_participant_arrangement_3d(names, coords, participant_label, out_path):
     ax.set_ylim(1, -1)
     ax.set_zlim(-1, 1)
     add_depth_guides_3d(ax, remapped_coords)
-    add_projected_images_3d(ax, names, remapped_coords, zoom=0.30)
+    add_projected_stimuli_3d(ax, names, remapped_coords, zoom=0.40,
+                             border_width=8, label_size=12)
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
@@ -195,22 +449,14 @@ def plot_procrustes_arrangement_2d(aligned_list, mean_shape, participant_names,
     fig, ax = plt.subplots(figsize=(12, 12))
 
     ax.scatter(mean_shape[:, 0], mean_shape[:, 1], alpha=0.0)
-    for i, name in enumerate(stimulus_names):
-        img = load_image(name, zoom=0.22)
-        if img is not None:
-            ab = AnnotationBbox(img, (mean_shape[i, 0], mean_shape[i, 1]),
-                                frameon=False, zorder=5)
-            ax.add_artist(ab)
-        else:
-            ax.annotate(_stimulus_label(name),
-                        (mean_shape[i, 0], mean_shape[i, 1]),
-                        fontsize=10, ha="center")
 
-    pad = 0.15
+    pad = 0.22
     rx = mean_shape[:, 0].max() - mean_shape[:, 0].min() or 1
     ry = mean_shape[:, 1].max() - mean_shape[:, 1].min() or 1
     ax.set_xlim(mean_shape[:, 0].min() - pad * rx, mean_shape[:, 0].max() + pad * rx)
     ax.set_ylim(mean_shape[:, 1].min() - pad * ry, mean_shape[:, 1].max() + pad * ry)
+    add_stimuli_2d(ax, stimulus_names, mean_shape[:, 0], mean_shape[:, 1],
+                   zoom=0.32, border_width=8, label_size=12)
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_title("Procrustes Mean Shape (2D)")
@@ -235,7 +481,8 @@ def plot_procrustes_arrangement_3d(aligned_list, mean_shape, participant_names,
     ax.set_ylim(1, -1)
     ax.set_zlim(-1, 1)
     add_depth_guides_3d(ax, remapped_mean_shape)
-    add_projected_images_3d(ax, stimulus_names, remapped_mean_shape, zoom=0.30)
+    add_projected_stimuli_3d(ax, stimulus_names, remapped_mean_shape, zoom=0.40,
+                             border_width=8, label_size=12)
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
