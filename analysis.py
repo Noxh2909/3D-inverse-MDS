@@ -57,6 +57,10 @@ STIMULUS_BORDER_COLORS = {
 # Leave empty to skip detailed subset analysis.
 PARTICIPANTS = [4,7]
 
+# Set to True to scale Procrustes dissimilarity matrices to [0, 1].
+# Set to False to show raw disparities.
+NORMALIZE_PROCRUSTES_DISSIMILARITY = False
+
 
 # -------------------------------------------------
 # LOAD CSV
@@ -918,7 +922,8 @@ def plot_axis_variance(coords_list, condition, out_path, participant_names=None)
     print(f"Saved: {out_path}")
 
 
-def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, condition, out_path):
+def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, condition, out_path,
+                                         normalize=True):
     """Plot pairwise Procrustes dissimilarity matrix between all participants."""
     n = len(coords_list)
     D = np.zeros((n, n))
@@ -934,29 +939,35 @@ def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, conditi
     mask = ~np.eye(n, dtype=bool)
     mean_disp = np.mean(D[mask])
     max_disp = np.max(D[mask]) if np.any(mask) else 0.0
-    if max_disp > 0:
-        D_normalized = D / max_disp
+    if normalize and max_disp > 0:
+        matrix_values = D / max_disp
+        colorbar_label = "Normalized disparity"
     else:
-        D_normalized = D.copy()
+        matrix_values = D.copy()
+        colorbar_label = "Disparity"
+
+    display_max = np.max(matrix_values[mask]) if np.any(mask) else 0.0
+    if display_max <= 0:
+        display_max = 1.0
     
     # Plot matrix
     fig, ax = plt.subplots(figsize=(max(8, n * 0.8), max(8, n * 0.8)))
     lower_triangle_mask = np.triu(np.ones_like(D, dtype=bool), k=1)
-    masked_D = np.ma.array(D_normalized, mask=lower_triangle_mask)
+    masked_D = np.ma.array(matrix_values, mask=lower_triangle_mask)
     cmap = plt.cm.get_cmap("viridis").copy()
     cmap.set_bad(color="white", alpha=0)
 
-    im = ax.imshow(masked_D, cmap=cmap, vmin=0, vmax=1)
+    im = ax.imshow(masked_D, cmap=cmap, vmin=0, vmax=display_max)
     
     # Add values inside cells
     for i in range(n):
         for j in range(i + 1):
             ax.text(
                 j, i,
-                f"{D_normalized[i, j]:.3f}",
+                f"{matrix_values[i, j]:.3f}",
                 ha="center",
                 va="center",
-                color="white" if D_normalized[i, j] > 0.5 else "black",
+                color="white" if matrix_values[i, j] > display_max * 0.5 else "black",
                 fontsize=8
             )
     
@@ -967,7 +978,7 @@ def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, conditi
     ax.set_xlim(-0.5, n - 0.5)
     ax.set_ylim(n - 0.5, -0.5)
     
-    plt.colorbar(im, fraction=0.046, pad=0.04, label="Normalized disparity")
+    plt.colorbar(im, fraction=0.046, pad=0.04, label=colorbar_label)
     plt.title(
         f"Procrustes Dissimilarity Matrix - {condition.upper()}  "
         f"(Mean disparity = {mean_disp:.4f})"
@@ -979,29 +990,38 @@ def plot_procrustes_dissimilarity_matrix(coords_list, participant_names, conditi
     print(f"Saved: {out_path}")
 
 
+def _extract_spearman_rho(spearman_result):
+    rho_value = getattr(cast(Any, spearman_result), "statistic", spearman_result[0])
+    rho_array = np.asarray(rho_value)
+    if rho_array.ndim == 0:
+        rho = float(rho_array)
+    elif rho_array.shape == (2, 2):
+        rho = float(rho_array[0, 1])
+    else:
+        rho = float(rho_array.reshape(-1)[0])
+    if np.isnan(rho):
+        rho = 0.0
+    return rho
+
+
+def _condensed_rdm_vector(coords):
+    """Return the condensed pairwise-distance vector (one triangle, no diagonal)."""
+    return pdist(np.asarray(coords), metric="euclidean")
+
+
 def plot_spearman_consistency_heatmap(coords_list, participant_names, condition, out_path):
     """Plot a Spearman correlation heatmap between participants based on pairwise distances."""
     n = len(coords_list)
     correlation_matrix = np.ones((n, n))
-    distance_vectors = [squareform(pdist(coords, metric="euclidean"), checks=False)
-                        for coords in coords_list]
+    distance_vectors = [_condensed_rdm_vector(coords) for coords in coords_list]
 
     for i in range(n):
         for j in range(i + 1, n):
             spearman_result = spearmanr(
-                np.ravel(distance_vectors[i]),
-                np.ravel(distance_vectors[j]),
+                distance_vectors[i],
+                distance_vectors[j],
             )
-            rho_value = getattr(cast(Any, spearman_result), "statistic", spearman_result[0])
-            rho_array = np.asarray(rho_value)
-            if rho_array.ndim == 0:
-                rho = float(rho_array)
-            elif rho_array.shape == (2, 2):
-                rho = float(rho_array[0, 1])
-            else:
-                rho = float(rho_array.reshape(-1)[0])
-            if np.isnan(rho):
-                rho = 0.0
+            rho = _extract_spearman_rho(spearman_result)
             correlation_matrix[i, j] = rho
             correlation_matrix[j, i] = rho
 
@@ -1045,6 +1065,79 @@ def plot_spearman_consistency_heatmap(coords_list, participant_names, condition,
     print(f"Saved: {out_path}")
 
 
+def plot_crossdimensional_rdm_similarity(embeddings_2d, embeddings_3d, out_path):
+    """Compare each selected participant's 2D RDM against their 3D RDM."""
+    embeddings_by_participant_2d = {embedding[0]: embedding for embedding in embeddings_2d}
+    embeddings_by_participant_3d = {embedding[0]: embedding for embedding in embeddings_3d}
+    common_participants = sorted(
+        set(embeddings_by_participant_2d).intersection(embeddings_by_participant_3d)
+    )
+
+    if not common_participants:
+        return
+
+    participant_labels = []
+    rho_values = []
+
+    for participant_id in common_participants:
+        embedding_2d = embeddings_by_participant_2d[participant_id]
+        embedding_3d = embeddings_by_participant_3d[participant_id]
+
+        names_2d = embedding_2d[3]
+        coords_2d = embedding_2d[4]
+        names_3d = embedding_3d[3]
+        coords_3d = embedding_3d[4]
+        coords_by_name_3d = {name: coords for name, coords in zip(names_3d, coords_3d)}
+        common_names = [name for name in names_2d if name in coords_by_name_3d]
+
+        if len(common_names) < 2:
+            continue
+
+        ordered_coords_2d = np.asarray([
+            coords_2d[names_2d.index(name)] for name in common_names
+        ])
+        ordered_coords_3d = np.asarray([coords_by_name_3d[name] for name in common_names])
+
+        rdm_2d = _condensed_rdm_vector(ordered_coords_2d)
+        rdm_3d = _condensed_rdm_vector(ordered_coords_3d)
+        rho = _extract_spearman_rho(spearmanr(rdm_2d, rdm_3d))
+
+        participant_labels.append(embedding_2d[2])
+        rho_values.append(rho)
+
+    if not rho_values:
+        return
+
+    mean_rho = float(np.mean(rho_values))
+    fig, ax = plt.subplots(figsize=(max(6, len(rho_values) * 1.2), 5))
+    x_positions = np.arange(len(rho_values))
+    bars = ax.bar(x_positions, rho_values, color="slateblue", edgecolor="black")
+    # ax.axhline(mean_rho, color="red", linestyle="--", linewidth=2,
+    #            label=f"Mean rho = {mean_rho:.4f}")
+
+    for bar, rho in zip(bars, rho_values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            rho + (0.03 if rho >= 0 else -0.05),
+            f"{rho:.3f}",
+            ha="center",
+            va="bottom" if rho >= 0 else "top",
+            fontsize=9,
+        )
+
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(participant_labels, rotation=45, ha="right")
+    ax.set_ylabel("Spearman rho")
+    ax.set_ylim(-1, 1)
+    ax.set_title(f"2D vs 3D RDM Similarity")
+    ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
 def run_condition_analysis(embeddings, condition, out_dir, title_suffix=""):
     """Run the aggregated analysis suite for one condition."""
     if len(embeddings) < 2:
@@ -1071,7 +1164,13 @@ def run_condition_analysis(embeddings, condition, out_dir, title_suffix=""):
     plot_intersubject_consistency(disparities, participant_names, condition, consistency_path)
 
     dissim_path = out_dir / f"procrustes_dissimilarity_matrix_{condition}.png"
-    plot_procrustes_dissimilarity_matrix(coords_list, participant_names, condition, dissim_path)
+    plot_procrustes_dissimilarity_matrix(
+        coords_list,
+        participant_names,
+        condition,
+        dissim_path,
+        normalize=NORMALIZE_PROCRUSTES_DISSIMILARITY,
+    )
 
     spearman_path = out_dir / f"spearman_consistency_heatmap_{condition}.png"
     plot_spearman_consistency_heatmap(coords_list, participant_names, condition, spearman_path)
@@ -1168,6 +1267,12 @@ def main():
                                title_suffix=" (Detailed)")
         run_condition_analysis(detailed_embeddings_3d, "3d", DETAILED_3D_DIR,
                                title_suffix=" (Detailed)")
+        crossdim_path = DETAILED_DIR / "rdm_similarity_2d_vs_3d.png"
+        plot_crossdimensional_rdm_similarity(
+            detailed_embeddings_2d,
+            detailed_embeddings_3d,
+            crossdim_path,
+        )
 
     # Combined kNN plot (2D vs 3D)
     if len(embeddings_2d) >= 2 and len(embeddings_3d) >= 2:
