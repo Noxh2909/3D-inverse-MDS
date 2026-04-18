@@ -37,17 +37,10 @@ PICTURES_DIR = BASE_DIR / "pictures"
 ANALYSIS_DIR = BASE_DIR / "analysis"
 ANALYSIS_DIR.mkdir(exist_ok=True)
 
-ANALYSIS_2D_DIR = ANALYSIS_DIR / "2d"
-ANALYSIS_3D_DIR = ANALYSIS_DIR / "3d"
-ANALYSIS_2D_DIR.mkdir(exist_ok=True)
-ANALYSIS_3D_DIR.mkdir(exist_ok=True)
-
-PROCRUSTES_DIR = ANALYSIS_DIR / "procrustes"
-PROCRUSTES_2D_DIR = PROCRUSTES_DIR / "2d"
-PROCRUSTES_3D_DIR = PROCRUSTES_DIR / "3d"
-PROCRUSTES_DIR.mkdir(exist_ok=True)
-PROCRUSTES_2D_DIR.mkdir(exist_ok=True)
-PROCRUSTES_3D_DIR.mkdir(exist_ok=True)
+GENERAL_DIR = ANALYSIS_DIR / "general"
+GENERAL_2D_DIR = GENERAL_DIR / "2d"
+GENERAL_3D_DIR = GENERAL_DIR / "3d"
+DETAILED_DIR = ANALYSIS_DIR / "detailed"
 
 # Set to True for anonymous participant labels (Participant 1, 2, 3...)
 # Set to False to use actual folder names
@@ -68,10 +61,10 @@ STIMULUS_BORDER_COLORS = {
     12: "#012749",
 }
 
-# Restrict detailed Procrustes-style analysis to specific participant indices.
-# Example: [1, 2] will generate analysis/detailed/... for Participant 1 and 2 only.
-# Leave empty to skip detailed subset analysis.
-PARTICIPANTS = [4, 7]
+# Restrict per-participant detailed analysis to specific participant indices.
+# Example: [4, 7] will generate analysis/detailed/ only for Participant 4 and 7.
+# Leave empty [] to generate detailed analysis for ALL participants.
+PARTICIPANTS = []
 
 # Set to True to scale Procrustes dissimilarity matrices to [0, 1].
 # Set to False to show raw disparities.
@@ -740,9 +733,11 @@ def generalized_procrustes_analysis(coords_list):
 
 
 def compute_procrustes_distance(coords1, coords2):
-    """Compute Procrustes distance (disparity) between two configurations."""
-    _, _, disparity = procrustes(coords1, coords2)
-    return disparity
+    """Compute normalised RMSE between two Procrustes-aligned configurations."""
+    mtx1, mtx2, _ = procrustes(coords1, coords2)
+    n, p = mtx1.shape
+    rmse = np.sqrt(((mtx1 - mtx2) ** 2).sum() / (n * p))
+    return rmse
 
 
 def plot_intersubject_consistency(disparities, participant_names, condition, out_path):
@@ -840,10 +835,13 @@ def plot_shepard_global(coords_list, stimulus_names, condition, out_path):
     bin_centers = np.array(bin_centers)
     bin_means = np.array(bin_means)
 
-    # global R² between reference and embedding distances
+    # global R² (coefficient of determination against fitted regression line)
     if len(v_ref_rep) > 1:
-        r = np.corrcoef(v_ref_rep, all_embed)[0, 1]
-        r2 = r**2
+        coeffs = np.polyfit(v_ref_rep, all_embed, 1)
+        predicted = np.polyval(coeffs, v_ref_rep)
+        ss_res = np.sum((all_embed - predicted) ** 2)
+        ss_tot = np.sum((all_embed - np.mean(all_embed)) ** 2)
+        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
     else:
         r2 = 0.0
 
@@ -959,6 +957,121 @@ def plot_knn_combined(coords_list_2d, coords_list_3d, out_path):
 
 
 # -------------------------------------------------
+# PER-PARTICIPANT PLOTS
+# -------------------------------------------------
+
+
+def plot_knn_individual(coords_list, participant_names, condition, out_path):
+    """Per-participant kNN curves overlaid on a single plot."""
+    D_mats = [squareform(pdist(c, metric="euclidean")) for c in coords_list]
+    D_consensus_mats = _leave_one_out_consensus_matrices(D_mats)
+    n = D_mats[0].shape[0]
+    ks = list(range(1, n))
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    cmap = plt.cm.get_cmap("tab10", len(coords_list))
+
+    for idx, (D, D_consensus, name) in enumerate(
+        zip(D_mats, D_consensus_mats, participant_names)
+    ):
+        scores = [knn_overlap(D, D_consensus, k) for k in ks]
+        ax.plot(
+            ks, scores, marker=".", markersize=4,
+            label=name, color=cmap(idx), alpha=0.8,
+        )
+
+    ax.set_xlabel("k Nearest Neighbours")
+    ax.set_ylabel("Neighbour preservation")
+    ax.set_title(f"kNN Preservation per Participant ({condition.upper()})")
+    ax.set_ylim(0, 1)
+    ax.legend(fontsize=7, loc="lower right")
+    ax.grid(True, linestyle=":", linewidth=0.6)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def _plot_shepard_single(v_ref, v_embed, participant_label, condition, out_path):
+    """Shepard diagram for a single participant against LOO consensus."""
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.scatter(v_ref, v_embed, alpha=0.5, s=20)
+
+    min_v = min(v_ref.min(), v_embed.min())
+    max_v = max(v_ref.max(), v_embed.max())
+    ax.plot(
+        [min_v, max_v], [min_v, max_v],
+        "r--", linewidth=1.5, label="Identity",
+    )
+
+    if len(v_ref) > 1:
+        coeffs = np.polyfit(v_ref, v_embed, 1)
+        predicted = np.polyval(coeffs, v_ref)
+        ss_res = np.sum((v_embed - predicted) ** 2)
+        ss_tot = np.sum((v_embed - np.mean(v_embed)) ** 2)
+        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+    else:
+        r2 = 0.0
+
+    ax.set_xlabel("Consensus distance")
+    ax.set_ylabel("Participant distance")
+    ax.set_title(f"Shepard – {participant_label} ({condition.upper()})\nR² = {r2:.3f}")
+    ax.legend()
+    ax.grid(True, linestyle=":", linewidth=0.6)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def _plot_axis_variance_single(variance_ratios, participant_label, condition, out_path):
+    """Axis variance bar chart for a single participant."""
+    n_dims = len(variance_ratios)
+    dims = ["X", "Y", "Z"][:n_dims]
+
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.bar(dims, variance_ratios, color="steelblue", edgecolor="black")
+    for i_dim, val in enumerate(variance_ratios):
+        ax.text(i_dim, val + 0.02, f"{val:.2f}", ha="center", fontsize=9)
+
+    ax.set_ylabel("Variance ratio")
+    ax.set_title(f"Axis Variance – {participant_label} ({condition.upper()})")
+    ax.set_ylim(0, 1)
+    ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def _plot_rdm_scatter_single(coords_2d, coords_3d, participant_label, out_path):
+    """Scatter of 2D vs 3D pairwise distances for a single participant."""
+    rdm_2d = pdist(coords_2d, metric="euclidean")
+    rdm_3d = pdist(coords_3d, metric="euclidean")
+    rho = _extract_spearman_rho(spearmanr(rdm_2d, rdm_3d))
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.scatter(rdm_2d, rdm_3d, alpha=0.5, s=20, color="slateblue")
+
+    min_v = min(rdm_2d.min(), rdm_3d.min())
+    max_v = max(rdm_2d.max(), rdm_3d.max())
+    ax.plot([min_v, max_v], [min_v, max_v], "r--", linewidth=1.5, alpha=0.5)
+
+    ax.set_xlabel("2D pairwise distance")
+    ax.set_ylabel("3D pairwise distance")
+    ax.set_title(f"2D vs 3D RDM – {participant_label}\nSpearman ρ = {rho:.3f}")
+    ax.grid(True, linestyle=":", linewidth=0.6)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+# -------------------------------------------------
 # AXIS VARIANCE (DIMENSION USAGE)
 # -------------------------------------------------
 
@@ -1037,9 +1150,9 @@ def plot_procrustes_dissimilarity_matrix(
     # Compute pairwise Procrustes disparities
     for i in range(n):
         for j in range(i + 1, n):
-            _, _, disparity = procrustes(coords_list[i], coords_list[j])
-            D[i, j] = disparity
-            D[j, i] = disparity
+            rmse = compute_procrustes_distance(coords_list[i], coords_list[j])
+            D[i, j] = rmse
+            D[j, i] = rmse
 
     # compute mean disparity (ignore diagonal zeros)
     mask = ~np.eye(n, dtype=bool)
@@ -1355,6 +1468,15 @@ def run_condition_analysis(embeddings, condition, out_dir, title_suffix=""):
                 )
             ),
         ),
+        (
+            "Per-participant kNN",
+            lambda: plot_knn_individual(
+                coords_list,
+                participant_names,
+                condition,
+                out_dir / f"knn_individual_{condition}.png",
+            ),
+        ),
     ]
 
     progress = _progress(
@@ -1370,22 +1492,14 @@ def run_condition_analysis(embeddings, condition, out_dir, title_suffix=""):
 
 def main():
     # Collect all embeddings per condition
-    embeddings_2d = []  # list of (participant_name, names, coords)
+    embeddings_2d = []  # list of (pid, pname, plabel, names, coords)
     embeddings_3d = []
 
-    # Output directories for per-participant arrangement plots
-    ARRANGEMENTS_DIR = ANALYSIS_DIR / "arrangements"
-    ARR_2D_DIR = ARRANGEMENTS_DIR / "2d"
-    ARR_3D_DIR = ARRANGEMENTS_DIR / "3d"
-    DETAILED_DIR = ANALYSIS_DIR / "detailed"
-    DETAILED_2D_DIR = DETAILED_DIR / "2d"
-    DETAILED_3D_DIR = DETAILED_DIR / "3d"
-    ARRANGEMENTS_DIR.mkdir(exist_ok=True)
-    ARR_2D_DIR.mkdir(exist_ok=True)
-    ARR_3D_DIR.mkdir(exist_ok=True)
+    # Create output directories
+    GENERAL_DIR.mkdir(parents=True, exist_ok=True)
+    GENERAL_2D_DIR.mkdir(exist_ok=True)
+    GENERAL_3D_DIR.mkdir(exist_ok=True)
     DETAILED_DIR.mkdir(exist_ok=True)
-    DETAILED_2D_DIR.mkdir(exist_ok=True)
-    DETAILED_3D_DIR.mkdir(exist_ok=True)
 
     participant_index = 0
 
@@ -1395,14 +1509,13 @@ def main():
         if participant_dir.is_dir() and not participant_dir.name.startswith(".")
     ]
 
-    # Iterate through all participant folders in final_results
+    # ── Phase 1: Load all embeddings ──
     for participant_dir in _progress(
         participant_dirs,
-        desc="Participants",
+        desc="Loading participants",
         unit="participant",
         dynamic_ncols=True,
     ):
-
         participant_name = participant_dir.name
         participant_index += 1
         if ANONYMOUS:
@@ -1414,99 +1527,135 @@ def main():
             cond_dir = participant_dir / cond
             if not cond_dir.exists():
                 continue
-            out_dir = ANALYSIS_2D_DIR if cond == "2d" else ANALYSIS_3D_DIR
             csv_files = sorted(cond_dir.glob("*.csv"))
-            for csv_file in _progress(
-                csv_files,
-                desc=f"{participant_label} {cond.upper()}",
-                unit="file",
-                dynamic_ncols=True,
-                leave=False,
-            ):
-                # Create dissimilarity matrix
-                analyze_csv(csv_file, out_dir)
-
-                # Load embedding for Procrustes
+            for csv_file in csv_files:
                 names, coords = load_embedding(csv_file)
+                if cond == "2d":
+                    coords = coords[:, :2]
                 if len(coords) >= 2:
+                    embedding = (
+                        participant_index,
+                        participant_name,
+                        participant_label,
+                        names,
+                        coords,
+                    )
                     if cond == "2d":
-                        embeddings_2d.append(
-                            (
-                                participant_index,
-                                participant_name,
-                                participant_label,
-                                names,
-                                coords,
-                            )
-                        )
-                        # Per-participant 2D scatter
-                        arr_path = (
-                            ARR_2D_DIR / f"{participant_label.replace(' ', '_')}_2d.png"
-                        )
-                        plot_participant_arrangement_2d(
-                            names, coords, participant_label, arr_path
-                        )
+                        embeddings_2d.append(embedding)
                     else:
-                        embeddings_3d.append(
-                            (
-                                participant_index,
-                                participant_name,
-                                participant_label,
-                                names,
-                                coords,
-                            )
-                        )
-                        # Per-participant 3D cube
-                        arr_path = (
-                            ARR_3D_DIR / f"{participant_label.replace(' ', '_')}_3d.png"
-                        )
-                        plot_participant_arrangement_3d(
-                            names, coords, participant_label, arr_path
-                        )
+                        embeddings_3d.append(embedding)
 
-    run_condition_analysis(embeddings_2d, "2d", PROCRUSTES_2D_DIR)
-    run_condition_analysis(embeddings_3d, "3d", PROCRUSTES_3D_DIR)
-
-    selected_participants = set(PARTICIPANTS)
-    if selected_participants:
-        detailed_embeddings_2d = [
-            embedding
-            for embedding in embeddings_2d
-            if embedding[0] in selected_participants
-        ]
-        detailed_embeddings_3d = [
-            embedding
-            for embedding in embeddings_3d
-            if embedding[0] in selected_participants
-        ]
-
-        run_condition_analysis(
-            detailed_embeddings_2d, "2d", DETAILED_2D_DIR, title_suffix=" (Detailed)"
-        )
-        run_condition_analysis(
-            detailed_embeddings_3d, "3d", DETAILED_3D_DIR, title_suffix=" (Detailed)"
-        )
-        crossdim_path = DETAILED_DIR / "rdm_similarity_2d_vs_3d.png"
-        plot_crossdimensional_rdm_similarity(
-            detailed_embeddings_2d,
-            detailed_embeddings_3d,
-            crossdim_path,
-        )
+    # ── Phase 2: General aggregated analysis → analysis/general/{2d,3d}/ ──
+    run_condition_analysis(embeddings_2d, "2d", GENERAL_2D_DIR)
+    run_condition_analysis(embeddings_3d, "3d", GENERAL_3D_DIR)
 
     # Combined kNN plot (2D vs 3D)
     if len(embeddings_2d) >= 2 and len(embeddings_3d) >= 2:
-        coords_list_2d = [embedding[4] for embedding in embeddings_2d]
-        coords_list_3d = [embedding[4] for embedding in embeddings_3d]
-        knn_combined_path = PROCRUSTES_DIR / "knn_preservation_2d_vs_3d.png"
-        progress = _progress(
-            ["Combined kNN preservation"],
-            desc="Cross-condition plots",
-            unit="plot",
-            dynamic_ncols=True,
+        coords_list_2d = [e[4] for e in embeddings_2d]
+        coords_list_3d = [e[4] for e in embeddings_3d]
+        plot_knn_combined(
+            coords_list_2d, coords_list_3d,
+            GENERAL_DIR / "knn_preservation_2d_vs_3d.png",
         )
-        for step_name in progress:
-            _set_progress_label(progress, step_name)
-            plot_knn_combined(coords_list_2d, coords_list_3d, knn_combined_path)
+
+    # Cross-dimensional RDM bar chart
+    if embeddings_2d and embeddings_3d:
+        plot_crossdimensional_rdm_similarity(
+            embeddings_2d,
+            embeddings_3d,
+            GENERAL_DIR / "rdm_similarity_2d_vs_3d.png",
+        )
+
+    # ── Phase 3: Detailed per-participant → analysis/detailed/Participant_X/{2d,3d}/ ──
+    if PARTICIPANTS:
+        selected_indices = set(PARTICIPANTS)
+    else:
+        selected_indices = (
+            set(e[0] for e in embeddings_2d) | set(e[0] for e in embeddings_3d)
+        )
+
+    for cond, all_embeddings in [("2d", embeddings_2d), ("3d", embeddings_3d)]:
+        if len(all_embeddings) < 2:
+            continue
+
+        coords_list = [e[4] for e in all_embeddings]
+        D_mats = [squareform(pdist(c, metric="euclidean")) for c in coords_list]
+        D_consensus_mats = _leave_one_out_consensus_matrices(D_mats)
+
+        for idx, embedding in enumerate(
+            _progress(
+                all_embeddings,
+                desc=f"Detailed {cond.upper()}",
+                unit="participant",
+                dynamic_ncols=True,
+            )
+        ):
+            pid, pname, plabel, names, coords = embedding
+            if pid not in selected_indices:
+                continue
+
+            safe_label = plabel.replace(" ", "_")
+            p_dir = DETAILED_DIR / safe_label / cond
+            p_dir.mkdir(parents=True, exist_ok=True)
+
+            # Dissimilarity matrix
+            D = squareform(pdist(coords, metric="euclidean"))
+            D_plot = D / D.max() if D.max() > 0 else D.copy()
+            plot_dissimilarity_matrix(names, D_plot, f"dissimilarity_{cond}", p_dir)
+
+            # Arrangement
+            if cond == "2d":
+                plot_participant_arrangement_2d(
+                    names, coords, plabel, p_dir / f"arrangement_{cond}.png"
+                )
+            else:
+                plot_participant_arrangement_3d(
+                    names, coords, plabel, p_dir / f"arrangement_{cond}.png"
+                )
+
+            # Shepard individual
+            v_ref = squareform(D_consensus_mats[idx], checks=False)
+            v_embed = squareform(D_mats[idx], checks=False)
+            _plot_shepard_single(
+                v_ref, v_embed, plabel, cond, p_dir / f"shepard_{cond}.png"
+            )
+
+            # Axis variance
+            v = np.var(coords, axis=0)
+            v = v / np.sum(v)
+            _plot_axis_variance_single(
+                v, plabel, cond, p_dir / f"axis_variance_{cond}.png"
+            )
+
+    # Cross-dimensional RDM scatter per participant
+    embeddings_by_2d = {e[0]: e for e in embeddings_2d}
+    embeddings_by_3d = {e[0]: e for e in embeddings_3d}
+    common_pids = sorted(
+        selected_indices
+        & set(embeddings_by_2d.keys())
+        & set(embeddings_by_3d.keys())
+    )
+    for pid in common_pids:
+        e2d, e3d = embeddings_by_2d[pid], embeddings_by_3d[pid]
+        plabel = e2d[2]
+        names_2d, coords_2d = e2d[3], e2d[4]
+        names_3d, coords_3d = e3d[3], e3d[4]
+
+        coords_by_name_3d = dict(zip(names_3d, coords_3d))
+        common_names = [n for n in names_2d if n in coords_by_name_3d]
+        if len(common_names) < 2:
+            continue
+
+        ordered_2d = np.asarray(
+            [coords_2d[names_2d.index(n)] for n in common_names]
+        )
+        ordered_3d = np.asarray([coords_by_name_3d[n] for n in common_names])
+
+        safe_label = plabel.replace(" ", "_")
+        p_dir = DETAILED_DIR / safe_label
+        _plot_rdm_scatter_single(
+            ordered_2d, ordered_3d, plabel, p_dir / "rdm_scatter.png"
+        )
 
 
 if __name__ == "__main__":
