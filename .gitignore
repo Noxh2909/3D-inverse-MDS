@@ -8,6 +8,8 @@
 /shared/
 /analysis/
 *debriefing/
+*__pycache__/
+.vscode/
 /pictures_test/
 
 buildapp.sh
