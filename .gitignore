@@ -12,10 +12,7 @@
 .vscode/
 /pictures_test/
 
-buildapp.sh
-app_icon.icns
 Interface.py
 
 3D-iMDS.spec
 3D inverse MDS.spec
-app_icon.icns

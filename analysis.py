@@ -2,8 +2,8 @@
 analysis.py – Class-based analysis pipeline for 3D inverse-MDS experiment data.
 
 Loads participant embedding CSVs, runs Procrustes alignment, computes inter-subject
-consistency metrics (RMSE, Spearman, kNN preservation), and generates publication-
-ready plots for both aggregated and per-participant analysis.
+consistency metrics (RMSE, Spearman, kNN preservation), and generates 
+plots for both aggregated and per-participant analysis.
 
 Usage:
     python analysis.py
@@ -11,10 +11,11 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import csv
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 import numpy as np
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
@@ -37,6 +38,19 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class AnalysisSelection:
+    """Stores which analysis modules should be executed."""
+
+    metrics: frozenset[str] = frozenset()
+
+    def wants(self, *names: str) -> bool:
+        """Return True when one of the requested modules should run."""
+        if not self.metrics:
+            return True
+        return any(name in self.metrics for name in names)
+
+
 @dataclass
 class AnalysisConfig:
     """Central configuration for the analysis pipeline."""
@@ -46,12 +60,15 @@ class AnalysisConfig:
     # Set to True for anonymous participant labels (Participant 1, 2, …).
     anonymous: bool = True
 
-    # Restrict detailed analysis to specific participant indices (1-based).
+    # Restrict analysis to specific participant indices (1-based).
     # Empty list means ALL participants.
     participants: list[int] = field(default_factory=list)
 
     # Scale Procrustes dissimilarity matrices to [0, 1].
     normalize_procrustes: bool = False
+
+    # Select which analysis modules should run.
+    selection: AnalysisSelection = field(default_factory=AnalysisSelection)
 
     # Per-stimulus border colours (1-based stimulus index → hex).
     stimulus_border_colors: dict[int, str] = field(default_factory=lambda: {
@@ -1090,12 +1107,15 @@ class AnalysisPipeline:
             d for d in self.cfg.final_results_dir.iterdir()
             if d.is_dir() and not d.name.startswith(".")
         )
+        selected_participants = set(self.cfg.participants)
 
         for idx, p_dir in enumerate(
             _progress(participant_dirs, desc="Loading participants",
                       unit="participant", dynamic_ncols=True),
             start=1,
         ):
+            if selected_participants and idx not in selected_participants:
+                continue
             label = (f"Participant {idx}" if self.cfg.anonymous
                      else p_dir.name)
 
@@ -1123,7 +1143,7 @@ class AnalysisPipeline:
         if len(embeddings) < 2:
             return
 
-        print(f"\n--- Procrustes Analysis for {condition.upper()} ---")
+        print(f"\n--- {condition.upper()} analysis ---")
 
         coords_list = [e[4] for e in embeddings]
         stimulus_names = embeddings[0][3]
@@ -1132,40 +1152,50 @@ class AnalysisPipeline:
             for e in embeddings
         ]
 
-        mean_shape, aligned = self.stats.generalized_procrustes(coords_list)
-        assert mean_shape is not None, "Need at least one embedding for Procrustes"
-        disparities = [
-            self.stats.procrustes_rmse(mean_shape, a) for a in aligned
-        ]
-        print(f"Mean disparity {condition.upper()}: {np.mean(disparities):.4f}")
+        mean_shape = None
+        aligned: list[np.ndarray] = []
+        disparities: list[float] = []
+        if self.cfg.selection.wants("procrustes"):
+            mean_shape, aligned = self.stats.generalized_procrustes(coords_list)
+            assert mean_shape is not None, "Need at least one embedding for Procrustes"
+            disparities = [
+                self.stats.procrustes_rmse(mean_shape, a) for a in aligned
+            ]
+            print(f"Mean disparity {condition.upper()}: {np.mean(disparities):.4f}")
 
         steps = [
             ("Intersubject consistency",
              lambda: self.plots.intersubject_consistency(
                  disparities, participant_names, condition,
-                 out_dir / f"intersubject_consistency_{condition}.png")),
+                 out_dir / f"intersubject_consistency_{condition}.png"))
+            if self.cfg.selection.wants("procrustes") else None,
             ("Procrustes dissimilarity matrix",
              lambda: self.plots.procrustes_dissimilarity_matrix(
                  coords_list, participant_names, condition,
                  out_dir / f"procrustes_dissimilarity_matrix_{condition}.png",
-                 normalize=self.cfg.normalize_procrustes)),
+                 normalize=self.cfg.normalize_procrustes))
+            if self.cfg.selection.wants("procrustes") else None,
             ("Spearman consistency heatmap",
              lambda: self.plots.spearman_consistency_heatmap(
                  coords_list, participant_names, condition,
-                 out_dir / f"spearman_consistency_heatmap_{condition}.png")),
+                 out_dir / f"spearman_consistency_heatmap_{condition}.png"))
+            if self.cfg.selection.wants("spearman") else None,
             ("Shepard diagram",
              lambda: self.plots.shepard_global(
                  coords_list, stimulus_names, condition,
-                 out_dir / f"shepard_{condition}.png")),
+                 out_dir / f"shepard_{condition}.png"))
+            if self.cfg.selection.wants("shepard") else None,
             ("kNN preservation",
              lambda: self.plots.knn_curve(
                  coords_list, condition,
-                 out_dir / f"knn_preservation_{condition}.png")),
+                 out_dir / f"knn_preservation_{condition}.png"))
+            if self.cfg.selection.wants("knn") else None,
             ("Axis variance",
              lambda: self.plots.axis_variance(
                  coords_list, condition,
                  out_dir / f"axis_variance_{condition}.png",
-                 participant_names)),
+                 participant_names))
+            if self.cfg.selection.wants("axis_variance") else None,
             ("Procrustes arrangement",
              lambda: (
                  self.plots.procrustes_arrangement_2d(
@@ -1174,12 +1204,15 @@ class AnalysisPipeline:
                  if condition == "2d" else
                  self.plots.procrustes_arrangement_3d(
                      aligned, mean_shape, participant_names, stimulus_names,
-                     out_dir / f"procrustes_arrangement_{condition}.png"))),
+                     out_dir / f"procrustes_arrangement_{condition}.png")))
+            if self.cfg.selection.wants("procrustes") else None,
             ("Per-participant kNN",
              lambda: self.plots.knn_individual(
                  coords_list, participant_names, condition,
-                 out_dir / f"knn_individual_{condition}.png")),
+                 out_dir / f"knn_individual_{condition}.png"))
+            if self.cfg.selection.wants("knn") else None,
         ]
+        steps = [step for step in steps if step is not None]
 
         progress = _progress(steps, desc=f"{condition.upper()} plots",
                              unit="plot", dynamic_ncols=True)
@@ -1191,21 +1224,35 @@ class AnalysisPipeline:
 
     def _run_detailed(self) -> None:
         """Generate per-participant plots for selected participants."""
-        selected = (
-            set(self.cfg.participants) if self.cfg.participants
-            else {e[0] for e in self.embeddings_2d} |
-                 {e[0] for e in self.embeddings_3d}
-        )
+        selected = {e[0] for e in self.embeddings_2d} | {e[0] for e in self.embeddings_3d}
+        want_dissimilarity = self.cfg.selection.wants("dissimilarity")
+        want_arrangements = self.cfg.selection.wants("arrangements")
+        want_shepard = self.cfg.selection.wants("shepard")
+        want_axis_variance = self.cfg.selection.wants("axis_variance")
+        want_rdm_similarity = self.cfg.selection.wants("rdm_similarity")
+
+        if not any((
+            want_dissimilarity,
+            want_arrangements,
+            want_shepard,
+            want_axis_variance,
+            want_rdm_similarity,
+        )):
+            return
 
         for cond, all_emb in [("2d", self.embeddings_2d),
                                ("3d", self.embeddings_3d)]:
-            if len(all_emb) < 2:
+            if len(all_emb) < 1:
                 continue
 
-            coords_list = [e[4] for e in all_emb]
-            d_mats = [squareform(pdist(c, metric="euclidean"))
-                      for c in coords_list]
-            d_loo = self.stats.leave_one_out_consensus(d_mats)
+            d_mats: list[np.ndarray] = []
+            d_loo: list[np.ndarray] = []
+            if want_dissimilarity or want_shepard:
+                coords_list = [e[4] for e in all_emb]
+                d_mats = [squareform(pdist(c, metric="euclidean"))
+                          for c in coords_list]
+            if want_shepard:
+                d_loo = self.stats.leave_one_out_consensus(d_mats)
 
             for idx, emb in enumerate(
                 _progress(all_emb, desc=f"Detailed {cond.upper()}",
@@ -1219,37 +1266,40 @@ class AnalysisPipeline:
                          plabel.replace(" ", "_") / cond)
                 p_dir.mkdir(parents=True, exist_ok=True)
 
-                # Dissimilarity matrix.
-                D = squareform(pdist(coords, metric="euclidean"))
-                D_norm = D / D.max() if D.max() > 0 else D.copy()
-                self.plots.dissimilarity_matrix(
-                    names, D_norm, f"dissimilarity_{cond}", p_dir)
+                if want_dissimilarity:
+                    D = squareform(pdist(coords, metric="euclidean"))
+                    D_norm = D / D.max() if D.max() > 0 else D.copy()
+                    self.plots.dissimilarity_matrix(
+                        names, D_norm, f"dissimilarity_{cond}", p_dir)
 
-                # Arrangement.
-                if cond == "2d":
-                    self.plots.participant_arrangement_2d(
-                        names, coords, plabel,
-                        p_dir / f"arrangement_{cond}.png")
-                else:
-                    self.plots.participant_arrangement_3d(
-                        names, coords, plabel,
-                        p_dir / f"arrangement_{cond}.png")
+                if want_arrangements:
+                    if cond == "2d":
+                        self.plots.participant_arrangement_2d(
+                            names, coords, plabel,
+                            p_dir / f"arrangement_{cond}.png")
+                    else:
+                        self.plots.participant_arrangement_3d(
+                            names, coords, plabel,
+                            p_dir / f"arrangement_{cond}.png")
 
-                # Shepard individual.
-                v_ref = squareform(d_loo[idx], checks=False)
-                v_emb = squareform(d_mats[idx], checks=False)
-                self.plots.shepard_single(
-                    v_ref, v_emb, plabel, cond,
-                    p_dir / f"shepard_{cond}.png")
+                if want_shepard and d_mats and d_loo:
+                    v_ref = squareform(d_loo[idx], checks=False)
+                    v_emb = squareform(d_mats[idx], checks=False)
+                    self.plots.shepard_single(
+                        v_ref, v_emb, plabel, cond,
+                        p_dir / f"shepard_{cond}.png")
 
-                # Axis variance.
-                v = np.var(coords, axis=0)
-                v = v / np.sum(v)
-                self.plots.axis_variance_single(
-                    v, plabel, cond,
-                    p_dir / f"axis_variance_{cond}.png")
+                if want_axis_variance:
+                    v = np.var(coords, axis=0)
+                    v = v / np.sum(v)
+                    self.plots.axis_variance_single(
+                        v, plabel, cond,
+                        p_dir / f"axis_variance_{cond}.png")
 
         # Cross-dimensional RDM scatter per participant.
+        if not want_rdm_similarity:
+            return
+
         by_2d = {e[0]: e for e in self.embeddings_2d}
         by_3d = {e[0]: e for e in self.embeddings_3d}
         common = sorted(selected & set(by_2d) & set(by_3d))
@@ -1290,14 +1340,16 @@ class AnalysisPipeline:
         self._run_condition(self.embeddings_3d, "3d", self.cfg.general_3d_dir)
 
         # Combined kNN (2D vs 3D).
-        if len(self.embeddings_2d) >= 2 and len(self.embeddings_3d) >= 2:
+        if (self.cfg.selection.wants("knn") and
+                len(self.embeddings_2d) >= 2 and len(self.embeddings_3d) >= 2):
             self.plots.knn_combined(
                 [e[4] for e in self.embeddings_2d],
                 [e[4] for e in self.embeddings_3d],
                 self.cfg.general_dir / "knn_preservation_2d_vs_3d.png")
 
         # Cross-dimensional RDM bar chart.
-        if self.embeddings_2d and self.embeddings_3d:
+        if (self.cfg.selection.wants("rdm_similarity") and
+                self.embeddings_2d and self.embeddings_3d):
             self.plots.crossdimensional_rdm_similarity(
                 self.embeddings_2d, self.embeddings_3d,
                 self.cfg.general_dir / "rdm_similarity_2d_vs_3d.png")
@@ -1311,6 +1363,119 @@ class AnalysisPipeline:
 # ──────────────────────────────────────────────────────────────────────
 
 
-if __name__ == "__main__":
-    pipeline = AnalysisPipeline()
+def _parse_participants(raw_value: str) -> list[int]:
+    """Parse participant lists like '1,2,3' or '[1, 2, 3]'."""
+    value = raw_value.strip()
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1].strip()
+    if not value:
+        return []
+    return [int(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command line arguments for the analysis pipeline."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Analysis for the 3D inverse MDS project. "
+            "If no metric flags are provided, the full analysis suite is executed."
+        )
+    )
+    parser.add_argument(
+        "--participants",
+        type=_parse_participants,
+        default=[],
+        help="Participant list, e.g. 1,2,3 or [1,2,3].",
+    )
+    parser.add_argument(
+        "--normalize-procrustes",
+        action="store_true",
+        help="Normalize the Procrustes dissimilarity matrix to [0, 1].",
+    )
+    parser.add_argument(
+        "--named-participants",
+        action="store_true",
+        help="Use folder names instead of anonymous participant labels.",
+    )
+    parser.add_argument(
+        "--procrustes", "--procruster",
+        dest="procrustes",
+        action="store_true",
+        help="Run Procrustes-based outputs.",
+    )
+    parser.add_argument(
+        "--spearman", "--spreamean",
+        dest="spearman",
+        action="store_true",
+        help="Generate Spearman consistency plots.",
+    )
+    parser.add_argument(
+        "--shepard", "--shaprd",
+        dest="shepard",
+        action="store_true",
+        help="Generate global and individual Shepard diagrams.",
+    )
+    parser.add_argument(
+        "--knn",
+        action="store_true",
+        help="Generate kNN preservation plots.",
+    )
+    parser.add_argument(
+        "--axis-variance",
+        dest="axis_variance",
+        action="store_true",
+        help="Generate axis-variance plots.",
+    )
+    parser.add_argument(
+        "--rdm-similarity",
+        dest="rdm_similarity",
+        action="store_true",
+        help="Generate 2D-vs-3D RDM comparisons.",
+    )
+    parser.add_argument(
+        "--arrangements",
+        action="store_true",
+        help="Generate participant arrangement plots.",
+    )
+    parser.add_argument(
+        "--dissimilarity",
+        action="store_true",
+        help="Generate participant dissimilarity matrices.",
+    )
+    return parser.parse_args(argv)
+
+
+def _selection_from_args(args: argparse.Namespace) -> AnalysisSelection:
+    """Build the selection object from parsed command line flags."""
+    metrics = {
+        name for name in (
+            "procrustes",
+            "spearman",
+            "shepard",
+            "knn",
+            "axis_variance",
+            "rdm_similarity",
+            "arrangements",
+            "dissimilarity",
+        )
+        if getattr(args, name)
+    }
+    return AnalysisSelection(frozenset(metrics))
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the analysis pipeline."""
+    args = parse_args(argv)
+    config = AnalysisConfig(
+        anonymous=not args.named_participants,
+        participants=args.participants,
+        normalize_procrustes=args.normalize_procrustes,
+        selection=_selection_from_args(args),
+    )
+    pipeline = AnalysisPipeline(config)
     pipeline.run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

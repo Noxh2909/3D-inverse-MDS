@@ -25,12 +25,32 @@ from typing import Dict, Optional
 
 import numpy as np
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QFrame, QLineEdit, QPushButton, QVBoxLayout,
-    QHBoxLayout, QLabel, QCheckBox, QMainWindow, QSizePolicy, QGridLayout,
-    QScrollArea, QPlainTextEdit, QSlider, QDialog, QRadioButton,
+    QApplication,
+    QWidget,
+    QFrame,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QCheckBox,
+    QMainWindow,
+    QSizePolicy,
+    QGridLayout,
+    QScrollArea,
+    QPlainTextEdit,
+    QSlider,
+    QDialog,
+    QRadioButton,
 )
 from PySide6.QtGui import (
-    QVector3D, QDrag, QCursor, QPixmap, QFont, QKeySequence, QShortcut,
+    QVector3D,
+    QDrag,
+    QCursor,
+    QPixmap,
+    QFont,
+    QKeySequence,
+    QShortcut,
 )
 from PySide6.QtCore import Qt, QTimer, QMimeData, QPoint, QObject
 from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLGridItem
@@ -69,27 +89,56 @@ TOKEN_CONTAINER_W = 140
 POINT_COLOR = np.array([[1.0, 1.0, 0.0, 1.0]])
 CUBE_COLOR = (120, 120, 120, 0.2)
 LATTICE_COLOR = (120, 120, 120, 0.2)
-PLANE_OFFSETS = {'xy': 0.0, 'xz': 0.0, 'yz': 0.0}
+PLANE_OFFSETS = {"xy": 0.0, "xz": 0.0, "yz": 0.0}
 
 ALIGN_OK_HTML = "<span style='color:#7CFC00'>✅ {partner}</span>"
 ALIGN_BAD_HTML = "<span style='color:#ff6666'>❌ {partner}</span>"
+APP_NAME = "3D inverse MDS"
+
+
+def app_resource_dir() -> pathlib.Path:
+    """Return the directory containing bundled application resources."""
+    if getattr(sys, "frozen", False):
+        return pathlib.Path(
+            getattr(sys, "_MEIPASS", pathlib.Path(sys.executable).resolve().parent)
+        )
+    return pathlib.Path(__file__).resolve().parent
+
+
+def app_data_dir() -> pathlib.Path:
+    """Return a writable base directory for logs and result exports."""
+    if not getattr(sys, "frozen", False):
+        return app_resource_dir()
+
+    home = pathlib.Path.home()
+
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / APP_NAME
+
+    if sys.platform.startswith("win"):
+        base = pathlib.Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+        return base / APP_NAME
+
+    base = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local" / "share"))
+    return base / APP_NAME
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Pure Helper Functions
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def _category_of(pid: str) -> str:
     """Extract category (number prefix) from a point id like '3.1'."""
-    return pid.split('.')[0]
+    return pid.split(".")[0]
 
 
 def _partner_of(pid: str) -> Optional[str]:
     """Return the partner point id (e.g. '3.1' -> '3.2')."""
-    if '.' not in pid:
+    if "." not in pid:
         return None
     cat = _category_of(pid)
-    return f"{cat}.2" if pid.endswith('.1') else f"{cat}.1"
+    return f"{cat}.2" if pid.endswith(".1") else f"{cat}.1"
 
 
 def _token_style(placed: bool) -> str:
@@ -108,12 +157,12 @@ def _token_style(placed: bool) -> str:
 
 def _token_style_mode(mode: str) -> str:
     """Return CSS for named token modes: 'placed', 'disabled', or default active."""
-    if mode == 'placed':
+    if mode == "placed":
         return (
             "QLabel { color: #111; background: #7CFC00; border: 1px solid #3a3; "
             "border-radius: 4px; padding: 2px 6px; font-weight: 600; }"
         )
-    if mode == 'disabled':
+    if mode == "disabled":
         return (
             "QLabel { color: #aaa; background: #333; border: 1px solid #666; "
             "border-radius: 4px; padding: 2px 6px; }"
@@ -127,10 +176,11 @@ def _token_style_mode(mode: str) -> str:
 
 # ── Axis / Grid Building Helpers ──────────────────────────────────────────
 
+
 def _axis_segment(p0, p1, color=(1, 1, 1, 1), width=3):
     """Create a single GL line segment between two 3D points."""
     pts = np.array([p0, p1], dtype=float)
-    return GLLinePlotItem(pos=pts, color=color, width=width, mode='lines')
+    return GLLinePlotItem(pos=pts, color=color, width=width, mode="lines")
 
 
 def _auto_tick_step(length: float) -> float:
@@ -145,34 +195,43 @@ def _auto_tick_step(length: float) -> float:
 def _build_axis_solid(axis: str, length: float, color=(1, 1, 1, 1), width=3):
     """Build solid line items for a single axis."""
     endpoints = {
-        'x': ((0, 0, 0), (length, 0, 0)),
-        'y': ((0, 0, 0), (0, length, 0)),
-        'z': ((0, 0, 0), (0, 0, length)),
+        "x": ((0, 0, 0), (length, 0, 0)),
+        "y": ((0, 0, 0), (0, length, 0)),
+        "z": ((0, 0, 0), (0, 0, length)),
     }
     p0, p1 = endpoints[axis]
     return [_axis_segment(p0, p1, color=color, width=width)]
 
 
-def _build_axis_ticks(axis: str, length: float, tick_step: float = 0,
-                      tick_size: float = TICK_SIZE, color=(1, 1, 1, 0.9),
-                      width=2):
+def _build_axis_ticks(
+    axis: str,
+    length: float,
+    tick_step: float = 0,
+    tick_size: float = TICK_SIZE,
+    color=(1, 1, 1, 0.9),
+    width=2,
+):
     """Build tick mark line items along an axis."""
     items = []
     if not tick_step:
         tick_step = _auto_tick_step(length)
     t = float(tick_step)
     while t < length + 1e-9:
-        if axis == 'x':
-            items.append(_axis_segment((t, 0, 0), (t, 0, tick_size),
-                                       color=color, width=width))
-        elif axis == 'y':
-            items.append(_axis_segment((0, t, 0), (0, t, tick_size),
-                                       color=color, width=width))
+        if axis == "x":
+            items.append(
+                _axis_segment((t, 0, 0), (t, 0, tick_size), color=color, width=width)
+            )
+        elif axis == "y":
+            items.append(
+                _axis_segment((0, t, 0), (0, t, tick_size), color=color, width=width)
+            )
         else:
-            items.append(_axis_segment((0, 0, t), (tick_size, 0, t),
-                                       color=color, width=width))
-            items.append(_axis_segment((0, 0, t), (0, tick_size, t),
-                                       color=color, width=width))
+            items.append(
+                _axis_segment((0, 0, t), (tick_size, 0, t), color=color, width=width)
+            )
+            items.append(
+                _axis_segment((0, 0, t), (0, tick_size, t), color=color, width=width)
+            )
         t += tick_step
     return items
 
@@ -180,12 +239,13 @@ def _build_axis_ticks(axis: str, length: float, tick_step: float = 0,
 def _make_edge(p0, p1, color=CUBE_COLOR, width=CUBE_WIDTH):
     """Create a single wireframe edge between two points."""
     pts = np.array([p0, p1], dtype=float)
-    return GLLinePlotItem(pos=pts, color=color, width=width, mode='lines')
+    return GLLinePlotItem(pos=pts, color=color, width=width, mode="lines")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Logger
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class Logger:
     """Handles experiment event logging to console widget and CSV files.
@@ -212,8 +272,8 @@ class Logger:
     def write_log_to_file(self, log_path: str, text: str):
         """Append a line to the given log file."""
         try:
-            with open(log_path, 'a', encoding='utf-8', newline='') as f:
-                f.write(text + '\n')
+            with open(log_path, "a", encoding="utf-8", newline="") as f:
+                f.write(text + "\n")
         except Exception as e:
             self.log_to_console(f"Failed to write log: {e}")
 
@@ -222,28 +282,27 @@ class Logger:
         if not self.start_time:
             return
         elapsed = (datetime.now() - self.start_time).total_seconds()
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         name = "anonymous"
         if self._name_provider:
             name = self._name_provider() or "anonymous"
         name = name.strip().replace(" ", "_") or "anonymous"
 
-        base = os.path.dirname(os.path.abspath(__file__))
-        log_dir = os.path.join(base, "logs", name)
-        os.makedirs(log_dir, exist_ok=True)
+        log_dir = app_data_dir() / "logs" / name
+        log_dir.mkdir(parents=True, exist_ok=True)
 
-        log_path = os.path.join(
-            log_dir,
-            f"{name}_log_{self.start_time.strftime('%Y%m%d_%H%M%S')}.csv",
+        log_path = (
+            log_dir / f"{name}_log_{self.start_time.strftime('%Y%m%d_%H%M%S')}.csv"
         )
-        self.write_log_to_file(log_path, f"{timestamp},{elapsed:.2f},{event}")
+        self.write_log_to_file(str(log_path), f"{timestamp},{elapsed:.2f},{event}")
         self.log_to_console(event)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FileHandler
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class FileHandler:
     """Handles image discovery, loading, and category assignment.
@@ -253,8 +312,14 @@ class FileHandler:
     (original for preview, scaled for UI overlays).
     """
 
-    def __init__(self, point_tokens, images_by_cat: dict, images_orig: dict,
-                 png_name_by_cat: dict, image_max_wh: int):
+    def __init__(
+        self,
+        point_tokens,
+        images_by_cat: dict,
+        images_orig: dict,
+        png_name_by_cat: dict,
+        image_max_wh: int,
+    ):
         self.point_tokens = point_tokens
         self.images_by_cat = images_by_cat
         self.images_orig = images_orig
@@ -263,13 +328,12 @@ class FileHandler:
 
     def pictures_dir(self) -> str:
         """Return the absolute path to the images folder."""
-        base = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base, "pictures")
+        return str(app_resource_dir() / "pictures")
 
     def count_images(self) -> int:
         """Count image files in the pictures folder."""
         folder = self.pictures_dir()
-        exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'}
+        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
         count = 0
         try:
             for p in pathlib.Path(folder).iterdir():
@@ -284,7 +348,7 @@ class FileHandler:
         cats = []
         try:
             for t in self.point_tokens:
-                cat = t.pid.split('.')[0]
+                cat = t.pid.split(".")[0]
                 if cat not in cats:
                     cats.append(cat)
         except Exception:
@@ -297,7 +361,7 @@ class FileHandler:
     def load_images_for_categories(self):
         """Load and assign images to categories, populating the shared dicts."""
         folder = self.pictures_dir()
-        exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'}
+        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
         paths = []
         try:
@@ -322,9 +386,9 @@ class FileHandler:
             return
 
         if len(paths) > len(cats):
-            paths = paths[:len(cats)]
+            paths = paths[: len(cats)]
         if len(cats) > len(paths):
-            cats = cats[:len(paths)]
+            cats = cats[: len(paths)]
 
         self.images_by_cat.clear()
         self.images_orig.clear()
@@ -337,7 +401,8 @@ class FileHandler:
                 continue
             self.images_orig[cat] = pm_orig
             pm_scaled = pm_orig.scaled(
-                self.image_max_wh, self.image_max_wh,
+                self.image_max_wh,
+                self.image_max_wh,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
@@ -348,6 +413,7 @@ class FileHandler:
 # ═══════════════════════════════════════════════════════════════════════════
 # ConditionDialog
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class ConditionDialog(QDialog):
     """Modal dialog for selecting the initial experimental condition (2D/3D)."""
@@ -393,6 +459,7 @@ class ConditionDialog(QDialog):
 # Widget Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class _PointLabelFilter(QObject):
     """Event filter for overlay point labels (passthrough)."""
 
@@ -403,7 +470,7 @@ class _PointLabelFilter(QObject):
 class _ViewResizeFilter(QObject):
     """Repositions overlay checkboxes when the scene view resizes."""
 
-    def __init__(self, experiment: 'ExperimentWindow', parent=None):
+    def __init__(self, experiment: "ExperimentWindow", parent=None):
         super().__init__(parent)
         self.exp = experiment
 
@@ -412,8 +479,9 @@ class _ViewResizeFilter(QObject):
             exp = self.exp
             w, h = obj.width(), obj.height()
             try:
-                exp.cb_lock.move(w - exp.cb_lock.width() - 20,
-                                 h - exp.cb_lock.height() - 20)
+                exp.cb_lock.move(
+                    w - exp.cb_lock.width() - 20, h - exp.cb_lock.height() - 20
+                )
                 exp.cb_lock.raise_()
             except Exception:
                 pass
@@ -429,6 +497,7 @@ class _ViewResizeFilter(QObject):
 # SceneView
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class SceneView(GLViewWidget):
     """OpenGL scene view with drag-and-drop point placement and hover preview.
 
@@ -439,7 +508,7 @@ class SceneView(GLViewWidget):
     - Scroll-wheel height adjustment for placed points (3D mode)
     """
 
-    def __init__(self, experiment: 'ExperimentWindow', **kwargs):
+    def __init__(self, experiment: "ExperimentWindow", **kwargs):
         super().__init__(**kwargs)
         self.exp = experiment
         self.setAcceptDrops(True)
@@ -459,14 +528,14 @@ class SceneView(GLViewWidget):
 
     def dragEnterEvent(self, ev):
         """Accept drags carrying point-id MIME data."""
-        if ev.mimeData().hasFormat('application/x-point-id'):
+        if ev.mimeData().hasFormat("application/x-point-id"):
             ev.acceptProposedAction()
         else:
             ev.ignore()
 
     def dragMoveEvent(self, ev):
         """Continue accepting point-id drags."""
-        if ev.mimeData().hasFormat('application/x-point-id'):
+        if ev.mimeData().hasFormat("application/x-point-id"):
             ev.acceptProposedAction()
         else:
             ev.ignore()
@@ -474,12 +543,11 @@ class SceneView(GLViewWidget):
     def dropEvent(self, ev):
         """Place a token at the ray-plane intersection point."""
         exp = self.exp
-        if not ev.mimeData().hasFormat('application/x-point-id'):
+        if not ev.mimeData().hasFormat("application/x-point-id"):
             ev.ignore()
             return
         try:
-            pid = ev.mimeData().data(
-                'application/x-point-id').data().decode('utf-8')
+            pid = ev.mimeData().data("application/x-point-id").data().decode("utf-8")
         except Exception:
             ev.ignore()
             return
@@ -514,8 +582,7 @@ class SceneView(GLViewWidget):
                 ev.ignore()
                 return
             hit = p0 + d * t
-            x, y, z = exp.clamp_to_cube(
-                float(hit.x()), float(hit.y()), float(hit.z()))
+            x, y, z = exp.clamp_to_cube(float(hit.x()), float(hit.y()), float(hit.z()))
             exp.set_point_position(pid, (x, y, z))
 
         exp.update_helper_lines(pid)
@@ -550,7 +617,8 @@ class SceneView(GLViewWidget):
                 self.drag_pending = False
                 self.drag_offset = (mx, my)
                 item, coords_old = exp.placed_points.get(
-                    hit_pid, (None, [0, 0, AXIS_LEN * 0.5]))
+                    hit_pid, (None, [0, 0, AXIS_LEN * 0.5])
+                )
                 self.drag_z0 = float(coords_old[2])
                 self.freeze_xy_after_scroll = False
                 self.freeze_xy_pos = None
@@ -565,8 +633,7 @@ class SceneView(GLViewWidget):
         exp = self.exp
 
         # Tutorial: detect view rotation (left-click drag, no point selected)
-        if (ev.buttons() & Qt.MouseButton.LeftButton
-                and self.dragging_pid is None):
+        if ev.buttons() & Qt.MouseButton.LeftButton and self.dragging_pid is None:
             exp._check_tutorial_rotation()
 
         # Keep overlay labels positioned
@@ -600,13 +667,16 @@ class SceneView(GLViewWidget):
             dy = abs(my - self.drag_offset[1])
             if dx < 3 and dy < 3 and self.freeze_xy_pos is not None:
                 fx, fy = self.freeze_xy_pos
-                zp = (0.0 if exp.current_condition == "2d"
-                      else float(self.drag_z0 or AXIS_LEN * 0.5))
+                zp = (
+                    0.0
+                    if exp.current_condition == "2d"
+                    else float(self.drag_z0 or AXIS_LEN * 0.5)
+                )
                 if exp.current_condition == "2d":
                     exp.set_point_position(pid, (fx, 0.0, zp))
                 else:
                     exp.set_point_position(pid, (fx, fy, zp))
-                cat = pid.split('.')[0]
+                cat = pid.split(".")[0]
                 exp.set_preview_for_category(cat)
                 return
             else:
@@ -617,29 +687,31 @@ class SceneView(GLViewWidget):
         if p0 is None or p1 is None:
             return
 
-        zp = (0.0 if exp.current_condition == "2d"
-              else float(self.drag_z0 or AXIS_LEN * 0.5))
-        d = QVector3D(float(p1.x() - p0.x()), float(p1.y() - p0.y()),
-                      float(p1.z() - p0.z()))
+        zp = (
+            0.0
+            if exp.current_condition == "2d"
+            else float(self.drag_z0 or AXIS_LEN * 0.5)
+        )
+        d = QVector3D(
+            float(p1.x() - p0.x()), float(p1.y() - p0.y()), float(p1.z() - p0.z())
+        )
 
         if exp.current_condition == "2d":
             if abs(d.y()) > 1e-9:
                 t = (0.0 - p0.y()) / d.y()
                 if t >= 0:
                     hit = p0 + d * t
-                    x, _, z = exp.clamp_to_cube(
-                        float(hit.x()), 0.0, float(hit.z()))
+                    x, _, z = exp.clamp_to_cube(float(hit.x()), 0.0, float(hit.z()))
                     exp.set_point_position(pid, (x, 0.0, z))
         else:
             if abs(d.z()) > 1e-9:
                 t = (zp - p0.z()) / d.z()
                 if t >= 0:
                     hit = p0 + d * t
-                    x, y, _ = exp.clamp_to_cube(
-                        float(hit.x()), float(hit.y()), zp)
+                    x, y, _ = exp.clamp_to_cube(float(hit.x()), float(hit.y()), zp)
                     exp.set_point_position(pid, (x, y, zp))
 
-        cat = pid.split('.')[0]
+        cat = pid.split(".")[0]
         exp.set_preview_for_category(cat)
 
     def _handle_hover(self, ev):
@@ -663,8 +735,7 @@ class SceneView(GLViewWidget):
 
             pick_r = float(max(16.0, POINT_SIZE + 6.0))
             prev_hover = self.hover_pid
-            self.hover_pid = (hit_pid if hit_pid and best_d2 <= pick_r ** 2
-                              else None)
+            self.hover_pid = hit_pid if hit_pid and best_d2 <= pick_r**2 else None
 
             if self.hover_pid != prev_hover:
                 if prev_hover is not None:
@@ -673,11 +744,10 @@ class SceneView(GLViewWidget):
                     exp.update_helper_lines(self.hover_pid)
 
             if self.hover_pid is not None:
-                cat = self.hover_pid.split('.')[0]
+                cat = self.hover_pid.split(".")[0]
                 exp.set_preview_for_category(cat)
                 item, _ = exp.placed_points[self.hover_pid]
-                item.setData(color=np.array([[1, 1, 1, 1]]),
-                             size=POINT_SIZE + 6)
+                item.setData(color=np.array([[1, 1, 1, 1]]), size=POINT_SIZE + 6)
                 for pid, (itm, _) in exp.placed_points.items():
                     if pid != self.hover_pid:
                         itm.setData(color=POINT_COLOR, size=POINT_SIZE)
@@ -747,6 +817,7 @@ class SceneView(GLViewWidget):
 # DraggableToken
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class DraggableToken(QLabel):
     """Draggable stimulus token label for the token dock panel.
 
@@ -754,12 +825,12 @@ class DraggableToken(QLabel):
     Supports hover preview and drag-and-drop with image attachment.
     """
 
-    def __init__(self, pid: str, experiment: 'ExperimentWindow', parent=None):
+    def __init__(self, pid: str, experiment: "ExperimentWindow", parent=None):
         super().__init__(pid, parent)
         self.pid = pid
         self.exp = experiment
         self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
-        self.setStyleSheet(_token_style_mode('disabled'))
+        self.setStyleSheet(_token_style_mode("disabled"))
         self.setFixedSize(110, 30)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMouseTracking(True)
@@ -767,7 +838,7 @@ class DraggableToken(QLabel):
     def enterEvent(self, ev):
         """Show image preview when hovering over token."""
         try:
-            cat = self.pid.split('.')[0]
+            cat = self.pid.split(".")[0]
             self.exp.show_hover_preview_over_dock(cat)
         except Exception:
             pass
@@ -785,7 +856,7 @@ class DraggableToken(QLabel):
     def mouseMoveEvent(self, ev):
         """Keep preview visible while hovering over token."""
         try:
-            cat = self.pid.split('.')[0]
+            cat = self.pid.split(".")[0]
             self.exp.show_hover_preview_over_dock(cat)
             self.raise_()
         except Exception:
@@ -799,7 +870,7 @@ class DraggableToken(QLabel):
 
         exp = self.exp
         exp.is_dock_drag = True
-        cat = self.pid.split('.')[0]
+        cat = self.pid.split(".")[0]
         exp.show_hover_preview_over_dock(cat)
 
         try:
@@ -815,7 +886,7 @@ class DraggableToken(QLabel):
 
         drag = QDrag(self)
         mime = QMimeData()
-        mime.setData('application/x-point-id', self.pid.encode('utf-8'))
+        mime.setData("application/x-point-id", self.pid.encode("utf-8"))
         drag.setMimeData(mime)
 
         pm = exp.images_by_cat.get(cat)
@@ -830,6 +901,7 @@ class DraggableToken(QLabel):
 # ═══════════════════════════════════════════════════════════════════════════
 # ExperimentWindow
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class ExperimentWindow(QMainWindow):
     """Main experiment window encapsulating all UI, state, and logic.
@@ -880,7 +952,7 @@ class ExperimentWindow(QMainWindow):
         self.cube_items: list = []
         self.point_tokens: list = []
         self.lattice_items: list = []
-        self.current_plane = 'xy'
+        self.current_plane = "xy"
         self.placement_phase = 1
         self.lock_camera = False
         self.images_by_cat: Dict[str, QPixmap] = {}
@@ -898,7 +970,7 @@ class ExperimentWindow(QMainWindow):
         self._header_y = 10
         self._is_collapsed = False
         self.axis_items = {"x": [], "y": [], "z": []}
-        self.axis_tick_labels = {'x': [], 'y': [], 'z': []}
+        self.axis_tick_labels = {"x": [], "y": [], "z": []}
         self._point_label_filter = _PointLabelFilter()
 
     # ══════════════════════════════════════════════════════════════════════
@@ -921,7 +993,8 @@ class ExperimentWindow(QMainWindow):
         self.left_col = QFrame()
         self.left_col.setFrameShape(QFrame.Shape.StyledPanel)
         self.left_col.setStyleSheet(
-            "QFrame { border: 0px solid #666; border-radius: 8px; }")
+            "QFrame { border: 0px solid #666; border-radius: 8px; }"
+        )
         self.left_col.setMinimumWidth(120)
         self.left_v = QVBoxLayout(self.left_col)
         self.left_v.setContentsMargins(10, 10, 10, 20)
@@ -944,14 +1017,16 @@ class ExperimentWindow(QMainWindow):
         self.preview_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_box.setStyleSheet(
             "QLabel { background: rgba(255,255,255,0.1); color: #ddd; "
-            "border: 1px solid #888; border-radius: 6px; }")
+            "border: 1px solid #888; border-radius: 6px; }"
+        )
         self.preview_box.setText("Image Preview")
 
         self.preview_label = QLabel("Preview:")
         self.preview_layout.addWidget(self.preview_label)
         self.preview_label.setStyleSheet(
             "color: #fff; font-size: 14px; font-weight: 600; "
-            "background: transparent;")
+            "background: transparent;"
+        )
         self.preview_label.adjustSize()
         self.preview_label.show()
 
@@ -964,7 +1039,8 @@ class ExperimentWindow(QMainWindow):
         self.title_label = QLabel("Inverse MDS", parent=self)
         self.title_label.setStyleSheet(
             "color: white; font-size: 26px; font-weight: 700; "
-            "background: transparent;")
+            "background: transparent;"
+        )
         self.title_label.adjustSize()
         self.title_label.move(20, 30)
         self.title_label.raise_()
@@ -973,8 +1049,7 @@ class ExperimentWindow(QMainWindow):
         line_top = QFrame(parent=self)
         line_top.setFrameShape(QFrame.Shape.HLine)
         line_top.setFrameShadow(QFrame.Shadow.Plain)
-        line_top.setStyleSheet(
-            "color: gray; background-color: transparent;")
+        line_top.setStyleSheet("color: gray; background-color: transparent;")
         line_top.setFixedWidth(380)
         line_top.move(20, 60)
 
@@ -982,7 +1057,8 @@ class ExperimentWindow(QMainWindow):
         self.name_label = QLabel("Participant:", parent=self)
         self.name_label.setStyleSheet(
             "color: white; font-size: 16px; background: transparent; "
-            "font-weight: bold;")
+            "font-weight: bold;"
+        )
         self.name_label.adjustSize()
         self.name_label.move(20, 90)
         self.name_label.raise_()
@@ -993,7 +1069,8 @@ class ExperimentWindow(QMainWindow):
         self.name_input.setFixedWidth(200)
         self.name_input.setStyleSheet(
             "color: #000000; background: #f5f5f5; border: 1px solid black; "
-            "border-radius: 6px; padding: 4px 8px;")
+            "border-radius: 6px; padding: 4px 8px;"
+        )
         self.name_input.move(20, 115)
         self.name_input.raise_()
 
@@ -1001,7 +1078,8 @@ class ExperimentWindow(QMainWindow):
         self.age_label = QLabel("Age:", parent=self)
         self.age_label.setStyleSheet(
             "color: white; font-size: 16px; background: transparent; "
-            "font-weight: bold;")
+            "font-weight: bold;"
+        )
         self.age_label.adjustSize()
         self.age_label.move(230, 90)
         self.age_label.raise_()
@@ -1017,7 +1095,8 @@ class ExperimentWindow(QMainWindow):
 
         self.age_value = QLabel("24", parent=self)
         self.age_value.setStyleSheet(
-            "color: white; font-size: 16px; background: transparent;")
+            "color: white; font-size: 16px; background: transparent;"
+        )
         self.age_value.adjustSize()
         self.age_value.move(270, 90)
         self.age_value.raise_()
@@ -1026,34 +1105,36 @@ class ExperimentWindow(QMainWindow):
         middle_line = QFrame(parent=self)
         middle_line.setFrameShape(QFrame.Shape.HLine)
         middle_line.setFrameShadow(QFrame.Shadow.Plain)
-        middle_line.setStyleSheet(
-            "color: gray; background-color: transparent;")
+        middle_line.setStyleSheet("color: gray; background-color: transparent;")
         middle_line.setFixedWidth(380)
         middle_line.move(20, 150)
 
     def _build_scene_view(self):
         """Build the 3D scene view, axes, and grids."""
         self.view = SceneView(experiment=self)
-        self.view.setBackgroundColor('k')
+        self.view.setBackgroundColor("k")
         self.view.setCameraPosition(distance=8)
         self.view.setCameraParams(fov=60)
-        self.view.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                QSizePolicy.Policy.Expanding)
+        self.view.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         view_wrap = QWidget()
         vw_lay = QVBoxLayout(view_wrap)
         vw_lay.setContentsMargins(0, 20, 20, 20)
         vw_lay.setSpacing(0)
         vw_lay.addWidget(self.view)
-        view_wrap.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                QSizePolicy.Policy.Expanding)
+        view_wrap.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._main_row.addWidget(view_wrap, 1)
 
         # Condition label (overlay on scene view)
         self.condition_label = QLabel("", parent=self.view)
         self.condition_label.setStyleSheet(
             "color: white; font-size: 16px; background: transparent; "
-            "font-weight: bold;")
+            "font-weight: bold;"
+        )
         self.condition_label.adjustSize()
         self.condition_label.move(10, 10)
         self.condition_label.raise_()
@@ -1068,12 +1149,15 @@ class ExperimentWindow(QMainWindow):
         self.axis_label_x = QLabel("", parent=self.view)
         self.axis_label_y = QLabel("", parent=self.view)
         self.axis_label_z = QLabel("", parent=self.view)
-        for lab, col in [(self.axis_label_x, "#d33"),
-                         (self.axis_label_y, "#0a0"),
-                         (self.axis_label_z, "#33d")]:
+        for lab, col in [
+            (self.axis_label_x, "#d33"),
+            (self.axis_label_y, "#0a0"),
+            (self.axis_label_z, "#33d"),
+        ]:
             lab.setStyleSheet(
                 f"color: {col}; font-size: 16px; font-weight: 500; "
-                f"background: transparent;")
+                f"background: transparent;"
+            )
             lab.raise_()
             lab.show()
 
@@ -1081,68 +1165,72 @@ class ExperimentWindow(QMainWindow):
         self.yz_grid = GLGridItem()
         self.yz_grid.setSize(x=AXIS_LEN, y=AXIS_LEN)
         self.yz_grid.rotate(90, 0, 1, 0)
-        self.yz_grid.translate(PLANE_OFFSETS['yz'],
-                               AXIS_LEN * 0.5, AXIS_LEN * 0.5)
+        self.yz_grid.translate(PLANE_OFFSETS["yz"], AXIS_LEN * 0.5, AXIS_LEN * 0.5)
 
         self.xz_grid = GLGridItem()
         self.xz_grid.setSize(x=AXIS_LEN, y=AXIS_LEN)
         self.xz_grid.rotate(90, 1, 0, 0)
-        self.xz_grid.translate(AXIS_LEN * 0.5,
-                               PLANE_OFFSETS['xz'], AXIS_LEN * 0.5)
+        self.xz_grid.translate(AXIS_LEN * 0.5, PLANE_OFFSETS["xz"], AXIS_LEN * 0.5)
 
     def _build_checklist(self):
         """Build the tutorial checklist overlay."""
         self.collapse_btn = QPushButton("", parent=self)
         self.collapse_btn.setFixedSize(20, 20)
-        self.collapse_btn.setCursor(
-            QCursor(Qt.CursorShape.PointingHandCursor))
+        self.collapse_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.collapse_btn.hide()
-        self.collapse_btn.setStyleSheet("""
+        self.collapse_btn.setStyleSheet(
+            """
             QPushButton {
                 color: white; background: transparent; border: none;
                 font-size: 12px; padding: 0px;
             }
             QPushButton:hover { background: rgba(255,255,255,0.1); }
-        """)
+        """
+        )
         self.collapse_btn.move(170, 180)
         self.collapse_btn.raise_()
 
         self.status_label = QLabel("Tutorial Checklist:", parent=self)
         self.status_label.setStyleSheet(
             "color: white; font-size: 16px; background: transparent; "
-            "font-weight: bold; border: none;")
+            "font-weight: bold; border: none;"
+        )
         self.status_label.adjustSize()
         self.status_label.move(20, 180)
         self.status_label.raise_()
 
         # Step 1: Set Name
-        self.set_name_label = QLabel(
-            "1. Set Name and Age:", parent=self)
+        self.set_name_label = QLabel("1. Set Name and Age:", parent=self)
         self.set_name_label.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.set_name_label.adjustSize()
         self.set_name_label.move(20, 210)
         self.set_name_label.raise_()
 
         self.name_cb = QCheckBox("", parent=self)
         self.name_cb.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.name_cb.setEnabled(False)
         self.name_cb.move(355, 205)
         self.name_cb.raise_()
 
         # Step 2: Hover
         self.check_hover_label = QLabel(
-            "2. Hover over Stimuli to preview images:", parent=self)
+            "2. Hover over Stimuli to preview images:", parent=self
+        )
         self.check_hover_label.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.check_hover_label.adjustSize()
         self.check_hover_label.move(20, 240)
         self.check_hover_label.raise_()
 
         self.check_hover_cb = QCheckBox("", parent=self)
         self.check_hover_cb.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.check_hover_cb.setEnabled(False)
         self.check_hover_cb.move(355, 235)
         self.check_hover_cb.raise_()
@@ -1150,14 +1238,16 @@ class ExperimentWindow(QMainWindow):
         # Step 3: Rotate
         self.rotate_and_adjust_label = QLabel(parent=self)
         self.rotate_and_adjust_label.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.rotate_and_adjust_label.adjustSize()
         self.rotate_and_adjust_label.move(20, 270)
         self.rotate_and_adjust_label.raise_()
 
         self.rotate_and_adjust_cb = QCheckBox("", parent=self)
         self.rotate_and_adjust_cb.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.rotate_and_adjust_cb.setEnabled(False)
         self.rotate_and_adjust_cb.move(355, 265)
         self.rotate_and_adjust_cb.raise_()
@@ -1165,46 +1255,54 @@ class ExperimentWindow(QMainWindow):
         # Step 4: Drag Stimuli
         self.stimuli_drag_label = QLabel(parent=self)
         self.stimuli_drag_label.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.stimuli_drag_label.adjustSize()
         self.stimuli_drag_label.move(20, 300)
         self.stimuli_drag_label.raise_()
 
         self.stimuli_cb = QCheckBox("", parent=self)
         self.stimuli_cb.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.stimuli_cb.setEnabled(False)
         self.stimuli_cb.move(355, 295)
         self.stimuli_cb.raise_()
 
         # Step 5: Adjust height
         self.adjust_token_height_label = QLabel(
-            '5. Hold Point and use "Wheel" to adjust height:', parent=self)
+            '5. Hold Point and use "Wheel" to adjust height:', parent=self
+        )
         self.adjust_token_height_label.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.adjust_token_height_label.adjustSize()
         self.adjust_token_height_label.move(20, 330)
         self.adjust_token_height_label.raise_()
 
         self.adjust_token_height_cb = QCheckBox("", parent=self)
         self.adjust_token_height_cb.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.adjust_token_height_cb.setEnabled(False)
         self.adjust_token_height_cb.move(355, 325)
         self.adjust_token_height_cb.raise_()
 
         # Step 6: Start
         self.start_label = QLabel(
-            '6. Press "Start" to start the Experiment:', parent=self)
+            '6. Press "Start" to start the Experiment:', parent=self
+        )
         self.start_label.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.start_label.adjustSize()
         self.start_label.move(20, 360)
         self.start_label.raise_()
 
         self.start_cb = QCheckBox("", parent=self)
         self.start_cb.setStyleSheet(
-            "color: lightgray; font-size: 14px; background: transparent;")
+            "color: lightgray; font-size: 14px; background: transparent;"
+        )
         self.start_cb.setEnabled(False)
         self.start_cb.move(355, 355)
         self.start_cb.raise_()
@@ -1212,7 +1310,8 @@ class ExperimentWindow(QMainWindow):
         # Counter
         self.counter_label = QLabel("(0/5)", parent=self)
         self.counter_label.setStyleSheet(
-            "color: lightgray; font-size: 12px; background: transparent;")
+            "color: lightgray; font-size: 12px; background: transparent;"
+        )
         self.counter_label.adjustSize()
         self.counter_label.move(375, 331)
         self.counter_label.raise_()
@@ -1221,8 +1320,7 @@ class ExperimentWindow(QMainWindow):
         self.line_bottom = QFrame(parent=self)
         self.line_bottom.setFrameShape(QFrame.Shape.HLine)
         self.line_bottom.setFrameShadow(QFrame.Shadow.Plain)
-        self.line_bottom.setStyleSheet(
-            "color: gray; background-color: transparent;")
+        self.line_bottom.setStyleSheet("color: gray; background-color: transparent;")
         self.line_bottom.setFixedWidth(380)
         self.line_bottom.move(20, 385)
 
@@ -1231,7 +1329,8 @@ class ExperimentWindow(QMainWindow):
         self.panel = QFrame(parent=self.left_col)
         self.left_v.addWidget(self.panel)
         self.panel.setFrameShape(QFrame.Shape.StyledPanel)
-        self.panel.setStyleSheet("""
+        self.panel.setStyleSheet(
+            """
             QFrame { background: none; border-radius: 8px; }
             QLabel { color: white; }
             QLineEdit { color: #000000; background: lightgray;
@@ -1241,7 +1340,8 @@ class ExperimentWindow(QMainWindow):
                           border: 1px solid black; border-radius: 4px;
                           padding: 4px 8px; }
             QPushButton:pressed { background: #e5e5e5; }
-        """)
+        """
+        )
         panel_layout = QVBoxLayout(self.panel)
         panel_layout.setContentsMargins(0, 8, 0, 10)
         panel_layout.setSpacing(ROW_SPACING)
@@ -1254,8 +1354,7 @@ class ExperimentWindow(QMainWindow):
             h.setSpacing(ROW_SPACING)
             lab = QLabel(caption, row)
             lab.setFixedWidth(LABEL_WIDTH)
-            lab.setAlignment(Qt.AlignmentFlag.AlignLeft
-                             | Qt.AlignmentFlag.AlignVCenter)
+            lab.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             edit = QLineEdit(row)
             edit.setText(default_text)
             edit.setFixedHeight(CONTROL_H)
@@ -1279,8 +1378,7 @@ class ExperimentWindow(QMainWindow):
         row_z.hide()
 
         for lab in (self.lab_x, self.lab_y, self.lab_z):
-            lab.setAlignment(Qt.AlignmentFlag.AlignLeft
-                             | Qt.AlignmentFlag.AlignVCenter)
+            lab.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         for edit in (self.edit_x, self.edit_y, self.edit_z):
             edit.setFixedWidth(INPUT_WIDTH)
             edit.setFixedHeight(CONTROL_H)
@@ -1305,7 +1403,8 @@ class ExperimentWindow(QMainWindow):
         # Lock View checkbox (overlay on scene view)
         self.cb_lock = QCheckBox("Lock View (^L)", parent=self.view)
         self.cb_lock.setStyleSheet(
-            "QCheckBox { color: #ffffff; background: rgba(0,0,0,120); }")
+            "QCheckBox { color: #ffffff; background: rgba(0,0,0,120); }"
+        )
         self.cb_lock.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cb_lock.setChecked(True)
         self.cb_lock.show()
@@ -1314,7 +1413,8 @@ class ExperimentWindow(QMainWindow):
         # Show Stimuli checkbox (overlay on scene view)
         self.cb_stimuli = QCheckBox("Show Stimuli (^B)", parent=self.view)
         self.cb_stimuli.setStyleSheet(
-            "QCheckBox { color: #ffffff; background: rgba(0,0,0,120); }")
+            "QCheckBox { color: #ffffff; background: rgba(0,0,0,120); }"
+        )
         self.cb_stimuli.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cb_stimuli.setChecked(True)
         self.cb_stimuli.show()
@@ -1322,7 +1422,8 @@ class ExperimentWindow(QMainWindow):
 
         # Resize filter for repositioning overlays
         self.view.installEventFilter(
-            _ViewResizeFilter(experiment=self, parent=self.view))
+            _ViewResizeFilter(experiment=self, parent=self.view)
+        )
 
     def _build_token_dock(self):
         """Build the token dock with draggable stimulus tokens."""
@@ -1330,7 +1431,8 @@ class ExperimentWindow(QMainWindow):
         self.left_v.addWidget(self.tokens_label)
         self.tokens_label.setStyleSheet(
             "color: #fff; font-size: 14px; font-weight: 600; "
-            "background: transparent;")
+            "background: transparent;"
+        )
         self.tokens_label.adjustSize()
         self.tokens_label.show()
 
@@ -1339,7 +1441,8 @@ class ExperimentWindow(QMainWindow):
         self.point_dock.setFrameShape(QFrame.Shape.StyledPanel)
         self.point_dock.setStyleSheet(
             "QFrame { background: rgba(0,0,0,120); border: 1px solid #777; "
-            "border-radius: 6px; }")
+            "border-radius: 6px; }"
+        )
 
         self.point_dock_layout = QGridLayout(self.point_dock)
         self.point_dock_layout.setContentsMargins(10, 8, 8, 8)
@@ -1349,14 +1452,18 @@ class ExperimentWindow(QMainWindow):
 
         # Count images to determine token count
         img_count = FileHandler(
-            point_tokens=[], images_by_cat={}, images_orig={},
-            png_name_by_cat={}, image_max_wh=IMAGE_MAX_WH,
+            point_tokens=[],
+            images_by_cat={},
+            images_orig={},
+            png_name_by_cat={},
+            image_max_wh=IMAGE_MAX_WH,
         ).count_images()
         img_count = max(1, img_count)
 
         for i in range(1, img_count + 1):
-            t = DraggableToken(f"{i}. Stimulus", experiment=self,
-                               parent=self.point_dock)
+            t = DraggableToken(
+                f"{i}. Stimulus", experiment=self, parent=self.point_dock
+            )
             t.setMinimumWidth(110)
             t.setFixedHeight(26)
             self.point_tokens.append(t)
@@ -1373,8 +1480,7 @@ class ExperimentWindow(QMainWindow):
         self.btn_start.setDisabled(True)
         self.btn_grid = QPushButton("Set View (^D)", self.left_col)
 
-        for btn in (self.btn_reset, self.btn_submit,
-                    self.btn_start, self.btn_grid):
+        for btn in (self.btn_reset, self.btn_submit, self.btn_start, self.btn_grid):
             btn.setFixedSize(110, 25)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
@@ -1393,10 +1499,12 @@ class ExperimentWindow(QMainWindow):
         self.btn_reset.setStyleSheet(btn_style)
         self.btn_submit.setStyleSheet(
             btn_style + "QPushButton { background: #00cc66; "
-            "border: solid lightgray; }")
+            "border: solid lightgray; }"
+        )
         self.btn_start.setStyleSheet(
             btn_style + "QPushButton { background: #00cc66; "
-            "border: solid lightgray; }")
+            "border: solid lightgray; }"
+        )
         self.btn_grid.setStyleSheet(btn_style)
         self.btn_grid.setCheckable(True)
         self.btn_submit.setEnabled(False)
@@ -1406,23 +1514,25 @@ class ExperimentWindow(QMainWindow):
         self.event_terminal_label = QLabel("Event Terminal:")
         self.event_terminal_label.setStyleSheet(
             "color: #fff; font-size: 14px; font-weight: 600; "
-            "background: transparent;")
+            "background: transparent;"
+        )
         self.event_terminal_label.adjustSize()
 
         self.console_box = QPlainTextEdit()
         self.console_box.setReadOnly(True)
-        self.console_box.setStyleSheet("""
+        self.console_box.setStyleSheet(
+            """
             QPlainTextEdit {
                 background: rgba(255,255,255,0.1); color: #ddd;
                 border-radius: 6px; font-size: 12px;
             }
-        """)
+        """
+        )
         self.console_box.setFixedHeight(100)
         self.console_box.setFixedWidth(self.preview_box.width())
 
         self.logger = Logger(self.console_box)
-        self.logger.set_name_provider(
-            lambda: self.name_input.text().strip())
+        self.logger.set_name_provider(lambda: self.name_input.text().strip())
 
     def _build_final_layout(self):
         """Assemble all widgets into the final layout structure."""
@@ -1437,17 +1547,14 @@ class ExperimentWindow(QMainWindow):
         token_v = QVBoxLayout(token_col)
         token_v.setContentsMargins(0, 0, 0, 0)
         token_v.setSpacing(6)
-        token_v.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        token_v.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         token_scroll = QScrollArea(parent=token_col)
         token_scroll.setWidget(self.point_dock)
         token_scroll.setWidgetResizable(False)
         token_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        token_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        token_scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        token_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        token_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         token_scroll.setFixedWidth(TOKEN_CONTAINER_W)
         token_scroll.setFixedHeight(415)
         token_scroll.setStyleSheet(
@@ -1459,14 +1566,12 @@ class ExperimentWindow(QMainWindow):
             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical "
             "{ height: 0px; } "
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical "
-            "{ background: none; }")
-        token_scroll.setSizePolicy(QSizePolicy.Policy.Fixed,
-                                   QSizePolicy.Policy.Fixed)
+            "{ background: none; }"
+        )
+        token_scroll.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
-        token_v.addWidget(self.tokens_label, 0,
-                          Qt.AlignmentFlag.AlignLeft)
-        token_v.addWidget(token_scroll, 0,
-                          Qt.AlignmentFlag.AlignLeft)
+        token_v.addWidget(self.tokens_label, 0, Qt.AlignmentFlag.AlignLeft)
+        token_v.addWidget(token_scroll, 0, Qt.AlignmentFlag.AlignLeft)
 
         # Preview column
         preview_col = QWidget(image_row)
@@ -1477,8 +1582,7 @@ class ExperimentWindow(QMainWindow):
         self.preview_label.setParent(preview_col)
         self.preview_label.move(0, 0)
         self.preview_box.setParent(preview_col)
-        preview_v.addWidget(self.preview_box, 0,
-                            Qt.AlignmentFlag.AlignTop)
+        preview_v.addWidget(self.preview_box, 0, Qt.AlignmentFlag.AlignTop)
         preview_v.addSpacing(ACTIONS_TOP_OFFSET)
         self.actions_row.setParent(preview_col)
         preview_v.addWidget(self.actions_row, 0)
@@ -1505,15 +1609,12 @@ class ExperimentWindow(QMainWindow):
 
     def _connect_signals(self):
         """Connect all widget signals to their handlers."""
-        self.age_slider.valueChanged.connect(
-            lambda v: self.age_value.setText(str(v)))
+        self.age_slider.valueChanged.connect(lambda v: self.age_value.setText(str(v)))
         self.name_input.textChanged.connect(self.update_progress_counter)
         self.check_hover_cb.toggled.connect(self.update_progress_counter)
-        self.rotate_and_adjust_cb.toggled.connect(
-            self.update_progress_counter)
+        self.rotate_and_adjust_cb.toggled.connect(self.update_progress_counter)
         self.stimuli_cb.toggled.connect(self.update_progress_counter)
-        self.adjust_token_height_cb.toggled.connect(
-            self.update_progress_counter)
+        self.adjust_token_height_cb.toggled.connect(self.update_progress_counter)
 
         self.collapse_btn.clicked.connect(self.toggle_checklist)
         self.cb_lock.toggled.connect(self._toggle_lock)
@@ -1537,20 +1638,20 @@ class ExperimentWindow(QMainWindow):
         try:
             sc = QShortcut(QKeySequence("Meta+B"), self)
             sc.activated.connect(
-                lambda: self.cb_stimuli.setChecked(
-                    not self.cb_stimuli.isChecked()))
+                lambda: self.cb_stimuli.setChecked(not self.cb_stimuli.isChecked())
+            )
             sc = QShortcut(QKeySequence("Meta+R"), self)
             sc.activated.connect(self.reset_all_points)
             sc = QShortcut(QKeySequence("Meta+D"), self)
             sc.activated.connect(
-                lambda: self.btn_grid.setChecked(
-                    not self.btn_grid.isChecked()))
+                lambda: self.btn_grid.setChecked(not self.btn_grid.isChecked())
+            )
             sc = QShortcut(QKeySequence("Meta+Return"), self)
             sc.activated.connect(self.export_results)
             sc = QShortcut(QKeySequence("Meta+L"), self)
             sc.activated.connect(
-                lambda: self.cb_lock.setChecked(
-                    not self.cb_lock.isChecked()))
+                lambda: self.cb_lock.setChecked(not self.cb_lock.isChecked())
+            )
         except Exception:
             pass
 
@@ -1597,8 +1698,7 @@ class ExperimentWindow(QMainWindow):
         # Re-position labels after camera is set
         self.position_axis_labels()
 
-        self.condition_label.setText(
-            f"{self.current_condition.upper()} Condition")
+        self.condition_label.setText(f"{self.current_condition.upper()} Condition")
         self.condition_label.adjustSize()
         self.condition_label.raise_()
 
@@ -1627,7 +1727,8 @@ class ExperimentWindow(QMainWindow):
 
         self.cb_lock.move(
             self.view.width() - self.cb_lock.width() - 20,
-            self.view.height() - self.cb_lock.height() - 20)
+            self.view.height() - self.cb_lock.height() - 20,
+        )
         self.cb_lock.raise_()
 
     # ══════════════════════════════════════════════════════════════════════
@@ -1643,7 +1744,7 @@ class ExperimentWindow(QMainWindow):
         """Compute camera distance for a given visible extent."""
         w = max(1, self.view.width())
         h = max(1, self.view.height())
-        vfov_deg = float(self.view.opts.get('fov', 60))
+        vfov_deg = float(self.view.opts.get("fov", 60))
         vfov = np.deg2rad(vfov_deg)
         aspect = w / h
         hfov = 2.0 * np.arctan(np.tan(vfov / 2.0) * aspect)
@@ -1654,25 +1755,25 @@ class ExperimentWindow(QMainWindow):
 
     def set_view_xy(self, offset_x=0, offset_y=0, offset_z=0):
         """Top-down view onto XZ plane (for 2D condition)."""
-        self.view.opts['ortho'] = True  # type: ignore[assignment]
+        self.view.opts["ortho"] = True  # type: ignore[assignment]
         cx = AXIS_LEN * 0.5 + offset_x
         cy = AXIS_LEN * 0.5 + offset_y
         cz = AXIS_LEN * 0.5 + offset_z
-        self.view.opts['center'] = QVector3D(cx, cy, cz)  # type: ignore[assignment]
+        self.view.opts["center"] = QVector3D(cx, cy, cz)  # type: ignore[assignment]
         self.view.setCameraPosition(
-            distance=self.fit_distance_for_extent(6),
-            elevation=0, azimuth=90)
+            distance=self.fit_distance_for_extent(6), elevation=0, azimuth=90
+        )
 
     def set_view_default(self):
         """Reset camera to the default 3D perspective view."""
         try:
-            self.view.opts['ortho'] = False  # type: ignore[assignment]
+            self.view.opts["ortho"] = False  # type: ignore[assignment]
         except Exception:
             pass
-        self.view.opts['center'] = self.cube_center()  # type: ignore[assignment]
+        self.view.opts["center"] = self.cube_center()  # type: ignore[assignment]
         self.view.setCameraPosition(
-            distance=self.fit_distance_for_extent(14),
-            elevation=35.3, azimuth=45)
+            distance=self.fit_distance_for_extent(14), elevation=35.3, azimuth=45
+        )
         self.position_axis_labels()
         self.logger.log_session_event("Set Default View")
         self.update_all_point_labels()
@@ -1687,7 +1788,7 @@ class ExperimentWindow(QMainWindow):
         try:
             return self.view.projectionMatrix(vp, vp)
         except TypeError:
-            return self.view.projectionMatrix(vp) # type: ignore[call-arg]
+            return self.view.projectionMatrix(vp)  # type: ignore[call-arg]
 
     def project_point(self, p):
         """Project a world 3D point to 2D view pixel coordinates (x, y)."""
@@ -1724,20 +1825,21 @@ class ExperimentWindow(QMainWindow):
 
     def intersect_with_plane(self, p0, p1, plane: str):
         """Intersect ray (p0->p1) with xy/xz/yz plane. Return (x,y,z)."""
-        d = QVector3D(float(p1.x() - p0.x()), float(p1.y() - p0.y()),
-                      float(p1.z() - p0.z()))
-        if plane == 'xy':
+        d = QVector3D(
+            float(p1.x() - p0.x()), float(p1.y() - p0.y()), float(p1.z() - p0.z())
+        )
+        if plane == "xy":
             if abs(d.z()) < 1e-9:
                 return None
-            t = (float(PLANE_OFFSETS['xy']) - p0.z()) / d.z()
-        elif plane == 'xz':
+            t = (float(PLANE_OFFSETS["xy"]) - p0.z()) / d.z()
+        elif plane == "xz":
             if abs(d.y()) < 1e-9:
                 return None
-            t = (float(PLANE_OFFSETS['xz']) - p0.y()) / d.y()
+            t = (float(PLANE_OFFSETS["xz"]) - p0.y()) / d.y()
         else:
             if abs(d.x()) < 1e-9:
                 return None
-            t = (float(PLANE_OFFSETS['yz']) - p0.x()) / d.x()
+            t = (float(PLANE_OFFSETS["yz"]) - p0.x()) / d.x()
         if t < 0:
             return None
         hit = p0 + d * t
@@ -1745,20 +1847,21 @@ class ExperimentWindow(QMainWindow):
 
     def intersect_with_plane_t(self, p0, p1, plane: str):
         """Like intersect_with_plane but returns (t, (x,y,z))."""
-        d = QVector3D(float(p1.x() - p0.x()), float(p1.y() - p0.y()),
-                      float(p1.z() - p0.z()))
-        if plane == 'xy':
+        d = QVector3D(
+            float(p1.x() - p0.x()), float(p1.y() - p0.y()), float(p1.z() - p0.z())
+        )
+        if plane == "xy":
             if abs(d.z()) < 1e-9:
                 return None
-            t = (float(PLANE_OFFSETS['xy']) - p0.z()) / d.z()
-        elif plane == 'xz':
+            t = (float(PLANE_OFFSETS["xy"]) - p0.z()) / d.z()
+        elif plane == "xz":
             if abs(d.y()) < 1e-9:
                 return None
-            t = (float(PLANE_OFFSETS['xz']) - p0.y()) / d.y()
+            t = (float(PLANE_OFFSETS["xz"]) - p0.y()) / d.y()
         else:
             if abs(d.x()) < 1e-9:
                 return None
-            t = (float(PLANE_OFFSETS['yz']) - p0.x()) / d.x()
+            t = (float(PLANE_OFFSETS["yz"]) - p0.x()) / d.x()
         if t < 0:
             return None
         hit = p0 + d * t
@@ -1781,27 +1884,32 @@ class ExperimentWindow(QMainWindow):
         """Compute normalized forward vector from camera to center."""
         try:
             cp = self.camera_position_vec3()
-            ctr_raw = self.view.opts.get('center')
+            ctr_raw = self.view.opts.get("center")
             if cp is None or ctr_raw is None:
                 return None
             if isinstance(ctr_raw, QVector3D):
                 ctr = ctr_raw
             else:
                 try:
-                    x_a = getattr(ctr_raw, 'x', None)
+                    x_a = getattr(ctr_raw, "x", None)
                     if x_a is not None and callable(x_a):
                         ctr = QVector3D(
                             float(x_a()),  # type: ignore[arg-type]
-                            float(getattr(ctr_raw, 'y')()), # type: ignore[union-attr]
-                            float(getattr(ctr_raw, 'z')()))  # type: ignore[union-attr]
+                            float(getattr(ctr_raw, "y")()),  # type: ignore[union-attr]
+                            float(getattr(ctr_raw, "z")()),
+                        )  # type: ignore[union-attr]
                     else:
-                        ctr = QVector3D(float(ctr_raw[0]),  # type: ignore[index]
-                                        float(ctr_raw[1]),  # type: ignore[index]
-                                        float(ctr_raw[2]))  # type: ignore[index]
+                        ctr = QVector3D(
+                            float(ctr_raw[0]),  # type: ignore[index]
+                            float(ctr_raw[1]),  # type: ignore[index]
+                            float(ctr_raw[2]),
+                        )  # type: ignore[index]
                 except Exception:
-                    ctr = QVector3D(float(ctr_raw[0]),  # type: ignore[index]
-                                    float(ctr_raw[1]),  # type: ignore[index]
-                                    float(ctr_raw[2]))  # type: ignore[index]
+                    ctr = QVector3D(
+                        float(ctr_raw[0]),  # type: ignore[index]
+                        float(ctr_raw[1]),  # type: ignore[index]
+                        float(ctr_raw[2]),
+                    )  # type: ignore[index]
             c = np.array([float(ctr.x()), float(ctr.y()), float(ctr.z())])
             f = c - cp
             n = np.linalg.norm(f)
@@ -1825,8 +1933,7 @@ class ExperimentWindow(QMainWindow):
             within = (m <= x <= w - m) and (m <= y <= h - m)
             if cp is None or fwd is None:
                 return within
-            pt = np.array([float(coords[0]), float(coords[1]),
-                           float(coords[2])])
+            pt = np.array([float(coords[0]), float(coords[1]), float(coords[2])])
             if float(np.dot(pt - cp, fwd)) <= VIS_DOT_THRESHOLD:
                 return False
             return within
@@ -1838,8 +1945,8 @@ class ExperimentWindow(QMainWindow):
         p0, p1 = self.screen_to_world_ray(px, py)
         if p0 is None or p1 is None:
             return None
-        ortho = bool(self.view.opts.get('ortho', False))
-        planes_to_try = ('yz', 'xz')
+        ortho = bool(self.view.opts.get("ortho", False))
+        planes_to_try = ("yz", "xz")
 
         candidates = []
         for pl in planes_to_try:
@@ -1862,11 +1969,15 @@ class ExperimentWindow(QMainWindow):
     def ensure_point_item(self, pid: str):
         """Create or return a GLScatterPlotItem for a point sprite."""
         from pyqtgraph.opengl import GLScatterPlotItem
+
         if pid in self.placed_points:
             return self.placed_points[pid][0]
         item = GLScatterPlotItem(
             pos=np.array([[0.0, 0.0, 0.0]]),
-            size=POINT_SIZE, color=POINT_COLOR, pxMode=True)
+            size=POINT_SIZE,
+            color=POINT_COLOR,
+            pxMode=True,
+        )
         self.view.addItem(item)
         self.placed_points[pid] = (item, [0.0, 0.0, 0.0])
         return item
@@ -1884,7 +1995,7 @@ class ExperimentWindow(QMainWindow):
         self.update_image_label(pid)
         self.update_point_color(pid)
         self.update_helper_lines(pid)
-        if '.' in pid:
+        if "." in pid:
             self.update_pair_line(_category_of(pid))
         try:
             self.stimuli_cb.setChecked(True)
@@ -1926,7 +2037,7 @@ class ExperimentWindow(QMainWindow):
         self.hide_hover_preview()
 
         for t in self.point_tokens:
-            t.setProperty('placed', False)
+            t.setProperty("placed", False)
             t.setStyleSheet(_token_style(False))
             t.show()
 
@@ -1944,12 +2055,13 @@ class ExperimentWindow(QMainWindow):
         if pid in self.point_labels:
             return self.point_labels[pid]
         lab = QLabel(pid, parent=self.view)
-        lab.setProperty('pid', pid)
+        lab.setProperty("pid", pid)
         lab.installEventFilter(self._point_label_filter)
         lab.setStyleSheet(
             "color: #ffffff; background: rgba(0,0,0,140); "
             "border: 1px solid #666; border-radius: 4px; "
-            "padding: 1px 4px; font-size: 12px; font-weight: 600;")
+            "padding: 1px 4px; font-size: 12px; font-weight: 600;"
+        )
         lab.setTextFormat(Qt.TextFormat.RichText)
         lab.hide()
         self.point_labels[pid] = lab
@@ -1957,7 +2069,7 @@ class ExperimentWindow(QMainWindow):
 
     def ensure_image_label(self, pid: str) -> Optional[QLabel]:
         """Return or create an image overlay label for a token id."""
-        cat = _category_of(pid) if '.' in pid else pid
+        cat = _category_of(pid) if "." in pid else pid
         pm = self.images_by_cat.get(cat)
         if pm is None or pm.isNull():
             return None
@@ -1966,8 +2078,7 @@ class ExperimentWindow(QMainWindow):
             lab.setPixmap(pm)
             return lab
         lab = QLabel(parent=self.view)
-        lab.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lab.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lab.setPixmap(pm)
         lab.hide()
         lab.lower()
@@ -2007,8 +2118,9 @@ class ExperimentWindow(QMainWindow):
             return
         px, py = pr
         lab.adjustSize()
-        lab.move(int(px - lab.width() // 2),
-                 int(py - lab.height() - IMAGE_OVER_POINT_MARGIN))
+        lab.move(
+            int(px - lab.width() // 2), int(py - lab.height() - IMAGE_OVER_POINT_MARGIN)
+        )
         lab.show()
 
     def update_point_label(self, pid: str):
@@ -2031,13 +2143,14 @@ class ExperimentWindow(QMainWindow):
             return
         px, py = pr
         try:
-            num = pid.split('.')[0]
+            num = pid.split(".")[0]
         except Exception:
             num = pid
         lab.setText(num)
         lab.adjustSize()
-        lab.move(int(px - lab.width() // 2),
-                 int(py - lab.height() - LABEL_OVER_POINT_MARGIN))
+        lab.move(
+            int(px - lab.width() // 2), int(py - lab.height() - LABEL_OVER_POINT_MARGIN)
+        )
         lab.show()
 
     def update_all_point_labels(self):
@@ -2049,7 +2162,7 @@ class ExperimentWindow(QMainWindow):
 
     def update_point_color(self, pid: str):
         """Set both points of a category green if Z values match."""
-        if pid not in self.placed_points or '.' not in pid:
+        if pid not in self.placed_points or "." not in pid:
             return
         partner = _partner_of(pid)
         if not partner or partner not in self.placed_points:
@@ -2069,7 +2182,7 @@ class ExperimentWindow(QMainWindow):
                 self.point_labels[pid].raise_()
             if pid in self.image_labels:
                 self.image_labels[pid].raise_()
-            cat = pid.split('.')[0]
+            cat = pid.split(".")[0]
             for suffix in ("", ".1", ".2"):
                 key = f"{cat}{suffix}"
                 if key in self.image_labels:
@@ -2125,8 +2238,8 @@ class ExperimentWindow(QMainWindow):
                 a = np.array(p0) + d * s
                 b = np.array(p0) + d * e
                 item = GLLinePlotItem(
-                    pos=np.vstack([a, b]),
-                    color=(1, 1, 1, 0.4), width=1, mode='lines')
+                    pos=np.vstack([a, b]), color=(1, 1, 1, 0.4), width=1, mode="lines"
+                )
                 out.append(item)
                 s += dash + gap
             return out
@@ -2155,8 +2268,7 @@ class ExperimentWindow(QMainWindow):
         """Ensure the hover preview label exists and return it."""
         if self.hover_preview_label is None:
             lab = QLabel(parent=self.view)
-            lab.setAttribute(
-                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            lab.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             lab.hide()
             self.hover_preview_label = lab
         return self.hover_preview_label
@@ -2176,7 +2288,8 @@ class ExperimentWindow(QMainWindow):
             self.preview_box.width() - 12,
             self.preview_box.height() - 12,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
+            Qt.TransformationMode.SmoothTransformation,
+        )
         self.preview_box.setPixmap(pm_scaled)
 
     def _show_hover_preview_over_dock_impl(self, cat: str):
@@ -2187,15 +2300,19 @@ class ExperimentWindow(QMainWindow):
             return
         lab = self.ensure_hover_preview()
         pm_big = pm_orig.scaled(
-            IMAGE_CONTAINER_WH, IMAGE_CONTAINER_WH,
+            IMAGE_CONTAINER_WH,
+            IMAGE_CONTAINER_WH,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
+            Qt.TransformationMode.SmoothTransformation,
+        )
         lab.setPixmap(pm_big)
         lab.adjustSize()
         dock_cx = self.point_dock.x() + self.point_dock.width() // 2
         top_y = self.point_dock.y()
-        lab.move(int(dock_cx - lab.width() // 2),
-                 int(top_y - lab.height() - IMAGE_OVER_POINT_MARGIN))
+        lab.move(
+            int(dock_cx - lab.width() // 2),
+            int(top_y - lab.height() - IMAGE_OVER_POINT_MARGIN),
+        )
         lab.show()
         lab.lower()
 
@@ -2215,18 +2332,21 @@ class ExperimentWindow(QMainWindow):
     def _build_axes(self):
         """Build axis line items with ticks for all three axes."""
         step = _auto_tick_step(AXIS_LEN)
-        self.axis_items["x"] = (
-            _build_axis_solid('x', AXIS_LEN, color=(1, 0, 0, 1), width=3)
-            + _build_axis_ticks('x', AXIS_LEN, tick_step=step,
-                                color=(1, 0, 0, 0.9), width=2))
-        self.axis_items["y"] = (
-            _build_axis_solid('y', AXIS_LEN, color=(0, 1, 0, 1), width=3)
-            + _build_axis_ticks('y', AXIS_LEN, tick_step=step,
-                                color=(0, 1, 0, 0.9), width=2))
-        self.axis_items["z"] = (
-            _build_axis_solid('z', AXIS_LEN, color=(0, 0, 1, 1), width=3)
-            + _build_axis_ticks('z', AXIS_LEN, tick_step=step,
-                                color=(0, 0, 1, 0.9), width=2))
+        self.axis_items["x"] = _build_axis_solid(
+            "x", AXIS_LEN, color=(1, 0, 0, 1), width=3
+        ) + _build_axis_ticks(
+            "x", AXIS_LEN, tick_step=step, color=(1, 0, 0, 0.9), width=2
+        )
+        self.axis_items["y"] = _build_axis_solid(
+            "y", AXIS_LEN, color=(0, 1, 0, 1), width=3
+        ) + _build_axis_ticks(
+            "y", AXIS_LEN, tick_step=step, color=(0, 1, 0, 0.9), width=2
+        )
+        self.axis_items["z"] = _build_axis_solid(
+            "z", AXIS_LEN, color=(0, 0, 1, 1), width=3
+        ) + _build_axis_ticks(
+            "z", AXIS_LEN, tick_step=step, color=(0, 0, 1, 0.9), width=2
+        )
 
     def show_z_axis(self):
         """Show the Y-axis (green), orthogonal to the 2D XZ plane."""
@@ -2344,19 +2464,34 @@ class ExperimentWindow(QMainWindow):
         items = []
         for y in ticks:
             for z in ticks:
-                items.append(_make_edge((0, y, z), (length, y, z),
-                                        color=LATTICE_COLOR,
-                                        width=LATTICE_WIDTH))
+                items.append(
+                    _make_edge(
+                        (0, y, z),
+                        (length, y, z),
+                        color=LATTICE_COLOR,
+                        width=LATTICE_WIDTH,
+                    )
+                )
         for x in ticks:
             for z in ticks:
-                items.append(_make_edge((x, 0, z), (x, length, z),
-                                        color=LATTICE_COLOR,
-                                        width=LATTICE_WIDTH))
+                items.append(
+                    _make_edge(
+                        (x, 0, z),
+                        (x, length, z),
+                        color=LATTICE_COLOR,
+                        width=LATTICE_WIDTH,
+                    )
+                )
         for x in ticks:
             for y in ticks:
-                items.append(_make_edge((x, y, 0), (x, y, length),
-                                        color=LATTICE_COLOR,
-                                        width=LATTICE_WIDTH))
+                items.append(
+                    _make_edge(
+                        (x, y, 0),
+                        (x, y, length),
+                        color=LATTICE_COLOR,
+                        width=LATTICE_WIDTH,
+                    )
+                )
         return items
 
     # ══════════════════════════════════════════════════════════════════════
@@ -2366,14 +2501,14 @@ class ExperimentWindow(QMainWindow):
     def position_axis_labels(self):
         """Position axis labels at the visible ends of the three axes."""
         axis_pts = {
-            'x': (AXIS_LEN, 0.0, 0.0),
-            'y': (0.0, AXIS_LEN, 0.0),
-            'z': (0.0, 0.0, AXIS_LEN),
+            "x": (AXIS_LEN, 0.0, 0.0),
+            "y": (0.0, AXIS_LEN, 0.0),
+            "z": (0.0, 0.0, AXIS_LEN),
         }
         label_map = {
-            'x': self.axis_label_x,
-            'y': self.axis_label_y,
-            'z': self.axis_label_z,
+            "x": self.axis_label_x,
+            "y": self.axis_label_y,
+            "z": self.axis_label_z,
         }
         for axis, world_pt in axis_pts.items():
             pr = self.project_point(world_pt)
@@ -2382,9 +2517,9 @@ class ExperimentWindow(QMainWindow):
             px, py = pr
             lab = label_map[axis]
             lab.adjustSize()
-            if axis == 'x':
+            if axis == "x":
                 lab.move(px - lab.width() // 2 - 20, py - lab.height() + 7)
-            elif axis == 'y':
+            elif axis == "y":
                 lab.move(px - lab.width() // 2 + 20, py - lab.height() + 7)
             else:
                 lab.move(px - 6, py - 25)
@@ -2399,7 +2534,8 @@ class ExperimentWindow(QMainWindow):
             self._header_label.setStyleSheet(
                 "color: #c13535; font-size: 20px; font-weight: 400; "
                 "background: rgba(0,0,0,0.7); padding: 10px 20px; "
-                "border-radius: 10px;")
+                "border-radius: 10px;"
+            )
         self._header_label.setText("Hint:" + text)
         self._header_label.adjustSize()
         vw = self.view.width() if self.view.width() > 0 else 800
@@ -2423,8 +2559,8 @@ class ExperimentWindow(QMainWindow):
         """Update a token as placed (hide/green) and update UI state."""
         for t in self.point_tokens:
             if t.pid == pid:
-                t.setProperty('placed', True)
-                t.setStyleSheet(_token_style_mode('placed'))
+                t.setProperty("placed", True)
+                t.setStyleSheet(_token_style_mode("placed"))
                 t.hide()
                 self.ensure_image_label(pid)
                 break
@@ -2435,7 +2571,7 @@ class ExperimentWindow(QMainWindow):
         """Mark a token as unplaced and update UI state."""
         for t in self.point_tokens:
             if t.pid == pid:
-                t.setProperty('placed', False)
+                t.setProperty("placed", False)
                 t.show()
                 break
         self.update_token_states()
@@ -2458,14 +2594,14 @@ class ExperimentWindow(QMainWindow):
     def update_token_states(self):
         """Update enabled/disabled state and styles of all tokens."""
         for t in self.point_tokens:
-            placed = bool(t.property('placed'))
+            placed = bool(t.property("placed"))
             if placed:
-                t.setStyleSheet(_token_style_mode('placed'))
+                t.setStyleSheet(_token_style_mode("placed"))
                 t.setEnabled(False)
             else:
                 t.setEnabled(True)
                 t.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
-                t.setStyleSheet(_token_style_mode('active'))
+                t.setStyleSheet(_token_style_mode("active"))
         self.hide_hover_preview()
 
     def remove_placed_point(self, pid: str):
@@ -2521,7 +2657,8 @@ class ExperimentWindow(QMainWindow):
                 self.pair_lines[cat].setData(pos=pts)
             else:
                 line = GLLinePlotItem(
-                    pos=pts, color=(1, 1, 1, 1), width=1, mode='lines')
+                    pos=pts, color=(1, 1, 1, 1), width=1, mode="lines"
+                )
                 self.pair_lines[cat] = line
             try:
                 self.view.addItem(self.pair_lines[cat])
@@ -2599,12 +2736,13 @@ class ExperimentWindow(QMainWindow):
             and self.check_hover_cb.isChecked()
             and self.rotate_and_adjust_cb.isChecked()
             and self.stimuli_cb.isChecked()
-            and self.adjust_token_height_cb.isChecked())
+            and self.adjust_token_height_cb.isChecked()
+        )
 
     def toggle_checklist(self, checked=None):
         """Toggle tutorial checklist between collapsed and expanded."""
         if self._is_collapsed:
-            self.collapse_btn.setText("\u25BC")
+            self.collapse_btn.setText("\u25bc")
             self.status_label.show()
             self.set_name_label.show()
             self.name_cb.show()
@@ -2622,7 +2760,7 @@ class ExperimentWindow(QMainWindow):
             self.line_bottom.move(20, 385)
             self._is_collapsed = False
         else:
-            self.collapse_btn.setText("\u25B6")
+            self.collapse_btn.setText("\u25b6")
             self.status_label.show()
             self.set_name_label.hide()
             self.name_cb.hide()
@@ -2644,18 +2782,24 @@ class ExperimentWindow(QMainWindow):
         """Update checklist step labels based on current condition."""
         if self.current_condition == "2d":
             self.rotate_and_adjust_label.setText(
-                '3. View Rotation in this instance is forbidden:')
+                "3. View Rotation in this instance is forbidden:"
+            )
             self.stimuli_drag_label.setText(
-                '4. Drag Stimuli into 2D space, adjust position:')
+                "4. Drag Stimuli into 2D space, adjust position:"
+            )
             self.adjust_token_height_label.setText(
-                '5. Hold and Drag Stimuli to alter point position:')
+                "5. Hold and Drag Stimuli to alter point position:"
+            )
         else:
             self.rotate_and_adjust_label.setText(
-                '3. Hold and Drag "left-click" to rotate view:')
+                '3. Hold and Drag "left-click" to rotate view:'
+            )
             self.stimuli_drag_label.setText(
-                '4. Drag and Drop Stimuli into the 3D space:')
+                "4. Drag and Drop Stimuli into the 3D space:"
+            )
             self.adjust_token_height_label.setText(
-                '5. Hold Point and use "Wheel" to adjust height:')
+                '5. Hold Point and use "Wheel" to adjust height:'
+            )
         self.adjust_token_height_label.adjustSize()
         self.rotate_and_adjust_label.adjustSize()
         self.stimuli_drag_label.adjustSize()
@@ -2722,10 +2866,9 @@ class ExperimentWindow(QMainWindow):
         ty = self.edit_y.text().strip()
         tz = self.edit_z.text().strip()
         self.axis_label_x.setText(tx)
-        self.axis_label_y.setText(tz)   # swapped
-        self.axis_label_z.setText(ty)   # swapped
-        for lab in (self.axis_label_x, self.axis_label_y,
-                    self.axis_label_z):
+        self.axis_label_y.setText(tz)  # swapped
+        self.axis_label_z.setText(ty)  # swapped
+        for lab in (self.axis_label_x, self.axis_label_y, self.axis_label_z):
             lab.show()
             lab.raise_()
         self.position_axis_labels()
@@ -2736,7 +2879,7 @@ class ExperimentWindow(QMainWindow):
         half = float(AXIS_LEN) * 0.5
         for pid, (_item, coords) in self.placed_points.items():
             x, y, z = map(float, coords)
-            cat = pid.split('.')[0]
+            cat = pid.split(".")[0]
             png_name = self.png_name_by_cat.get(cat, pid)
             if self.current_condition == "2d":
                 xn = (x - half) / half
@@ -2752,31 +2895,28 @@ class ExperimentWindow(QMainWindow):
 
     def export_results(self):
         """Export placed points to CSV and switch to the next condition."""
-        base = os.path.dirname(os.path.abspath(__file__))
-        results_root = os.path.join(base, "results")
+        results_root = app_data_dir() / "results"
         condition = self.current_condition or "unknown"
-        condition_dir = os.path.join(results_root, condition.lower())
+        condition_dir = results_root / condition.lower()
 
         try:
-            os.makedirs(condition_dir, exist_ok=True)
+            condition_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            self.logger.log_session_event(
-                f"Failed to create results directory: {e}")
+            self.logger.log_session_event(f"Failed to create results directory: {e}")
             return
 
-        participant_name = (self.name_input.text().strip().replace(" ", "_")
-                            or "anonymous")
+        participant_name = (
+            self.name_input.text().strip().replace(" ", "_") or "anonymous"
+        )
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_path = os.path.join(condition_dir, f"{participant_name}_{ts}.csv")
+        csv_path = condition_dir / f"{participant_name}_{ts}.csv"
 
         try:
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow([f"Participant: "
-                            f"{participant_name.replace('_', ' ')}"])
+                w.writerow([f"Participant: " f"{participant_name.replace('_', ' ')}"])
                 if self.start_time is not None:
-                    elapsed = (datetime.now()
-                               - self.start_time).total_seconds()
+                    elapsed = (datetime.now() - self.start_time).total_seconds()
                     w.writerow([f"Time: {elapsed:.2f}"])
                 else:
                     w.writerow(["Time:"])
@@ -2790,12 +2930,14 @@ class ExperimentWindow(QMainWindow):
                         x_csv, y_csv, z_csv = xn, yn, 0.0
                     else:
                         x_csv, y_csv, z_csv = xn, zn, yn
-                    w.writerow([
-                        name,
-                        f"{x_csv:.6f}",
-                        f"{y_csv:.6f}",
-                        f"{z_csv:.6f}",
-                    ])
+                    w.writerow(
+                        [
+                            name,
+                            f"{x_csv:.6f}",
+                            f"{y_csv:.6f}",
+                            f"{z_csv:.6f}",
+                        ]
+                    )
         except Exception as e:
             self.logger.log_session_event(f"Failed to write CSV: {e}")
             return
@@ -2857,9 +2999,12 @@ class ExperimentWindow(QMainWindow):
 # Entry Point
 # ═══════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
+
+def main() -> int:
+    """Start the experiment application."""
     QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
 
     app = QApplication(sys.argv)
     try:
@@ -2872,7 +3017,11 @@ if __name__ == "__main__":
 
     dialog = ConditionDialog()
     if dialog.exec() != QDialog.DialogCode.Accepted:
-        sys.exit(0)
+        return 0
 
     window = ExperimentWindow(condition=dialog.get_condition())
-    sys.exit(app.exec())
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
