@@ -264,7 +264,7 @@ class FileHandler:
     def pictures_dir(self) -> str:
         """Return the absolute path to the images folder."""
         base = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base, "pictures_test")
+        return os.path.join(base, "pictures")
 
     def count_images(self) -> int:
         """Count image files in the pictures folder."""
