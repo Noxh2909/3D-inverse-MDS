@@ -1,2 +1,3 @@
-# 3D-inverse-MDR
-Bachelor Thesis
+# 3D-inverse-MDS
+
+Bachelor Thesis, maintained and developed by Noah Kogge
