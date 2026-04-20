@@ -29,17 +29,6 @@ The implementation follows a single-trial, iMDS-inspired spatial arrangement par
 
 Important qualification: the project is not intended as a one-to-one reproduction of a canonical multi-arrangement iMDS protocol. Instead, it provides a custom research application designed to isolate the effect of interaction dimensionality under tightly matched conditions.
 
-## Main findings of the thesis
-
-The main results reported in the thesis can be summarized as follows:
-
-- `2D` leads to higher agreement across participants.
-- `3D` allows more heterogeneous and more flexible arrangements.
-- The additional variability in `3D` does not automatically imply a loss of relational structure.
-- The third dimension is actively used, but not uniformly; some axes are used more strongly than others.
-
-Together, these findings show that interaction dimensionality affects not only the display format, but also the structure of the externally expressed similarity space itself.
-
 ## Project structure
 
 The most important files and directories are:
