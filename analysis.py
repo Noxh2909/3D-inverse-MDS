@@ -65,7 +65,14 @@ class AnalysisConfig:
     participants: list[int] = field(default_factory=list)
 
     # Scale Procrustes dissimilarity matrices to [0, 1].
-    normalize_procrustes: bool = False
+    normalize_procrustes: bool = True
+
+    # Plot font controls.
+    font_size: int = 14
+    title_font_size: int = 16
+    scale_number_size: int = 16
+    stimulus_number_size: int = 16
+    matrix_number_size: int = 10
 
     # Select which analysis modules should run.
     selection: AnalysisSelection = field(default_factory=AnalysisSelection)
@@ -512,11 +519,50 @@ class PlotFactory:
     # ── helper ──
 
     @staticmethod
-    def _save(fig, path: Path, dpi: int = 200, **kwargs) -> None:
-        """Save a figure, close it, and print the output path."""
+    def _coords_to_unit_scale(coords: np.ndarray) -> np.ndarray:
+        """Map centered coordinates to [0, 1] without changing aspect ratios."""
+        arr = np.asarray(coords, dtype=float)
+        if arr.size == 0:
+            return arr.copy()
+        max_abs = np.nanmax(np.abs(arr))
+        if not np.isfinite(max_abs) or max_abs <= 0:
+            return np.full_like(arr, 0.5, dtype=float)
+        return np.clip(arr / (2.0 * max_abs) + 0.5, 0.0, 1.0)
+
+    @staticmethod
+    def _normalize_pair(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Normalize two non-negative vectors by their shared maximum."""
+        max_val = max(float(np.max(a)), float(np.max(b))) if len(a) and len(b) else 0.0
+        if max_val <= 0:
+            return a.copy(), b.copy()
+        return a / max_val, b / max_val
+
+    def _set_unit_ticks(self, ax) -> None:
+        ticks = np.linspace(0, 1, 5)
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
+        if hasattr(ax, "set_zticks"):
+            ax.set_zticks(ticks)
+
+    def _style_figure_fonts(self, fig) -> None:
+        for ax in fig.axes:
+            ax.title.set_fontsize(self.cfg.title_font_size)
+            ax.xaxis.label.set_fontsize(self.cfg.font_size)
+            ax.yaxis.label.set_fontsize(self.cfg.font_size)
+            ax.tick_params(axis="both", labelsize=self.cfg.scale_number_size)
+            if hasattr(ax, "zaxis"):
+                ax.zaxis.label.set_fontsize(self.cfg.font_size)
+                ax.zaxis.set_tick_params(labelsize=self.cfg.scale_number_size)
+            legend = ax.get_legend()
+            if legend is not None:
+                for text in legend.get_texts():
+                    text.set_fontsize(max(7, self.cfg.font_size - 3))
+
+    def _save(self, fig, path: Path, dpi: int = 200, **kwargs) -> None:
+        """Save a figure and close it."""
+        self._style_figure_fonts(fig)
         plt.savefig(path, dpi=dpi, bbox_inches="tight", **kwargs)
         plt.close(fig)
-        print(f"Saved: {path}")
 
     # ── per-participant arrangements ──
 
@@ -524,20 +570,20 @@ class PlotFactory:
                                    out_path: Path) -> None:
         """2D scatter of stimuli as placed by one participant."""
         fig, ax = plt.subplots(figsize=(8, 8))
-        x, y = coords[:, 0], coords[:, 1]
+        plot_coords = self._coords_to_unit_scale(coords)
+        x, y = plot_coords[:, 0], plot_coords[:, 1]
         ax.scatter(x, y, alpha=0.0)
 
-        pad = 0.22
-        rx = (x.max() - x.min()) or 1
-        ry = (y.max() - y.min()) or 1
-        ax.set_xlim(x.min() - pad * rx, x.max() + pad * rx)
-        ax.set_ylim(y.min() - pad * ry, y.max() + pad * ry)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        self._set_unit_ticks(ax)
 
         self.vis.add_stimuli_2d(ax, names, x, y, zoom=0.40,
-                                border_width=8, label_size=12)
+                                border_width=8,
+                                label_size=self.cfg.stimulus_number_size)
         ax.set(xlabel="X", ylabel="Y",
                title=f"Stimulus Arrangement 2D – {label}")
-        ax.set_aspect("equal", adjustable="datalim")
+        ax.set_aspect("equal", adjustable="box")
         ax.grid(True, linestyle=":", linewidth=0.5)
         plt.tight_layout()
         self._save(fig, out_path)
@@ -547,16 +593,20 @@ class PlotFactory:
         """3D scatter of stimuli as placed by one participant."""
         fig = plt.figure(figsize=(11, 10))
         ax = fig.add_subplot(111, projection="3d")
-        x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+        plot_coords = self._coords_to_unit_scale(coords)
+        x, y, z = plot_coords[:, 0], plot_coords[:, 1], plot_coords[:, 2]
 
-        ax.scatter(x, y, z, s=0, alpha=0)
-        ax.set_xlim(-1, 1)
-        ax.set_ylim(1, -1)
-        ax.set_zlim(-1, 1)
+        ax.scatter(x, y, z, s=0, alpha=0)  # type: ignore
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_zlim(0, 1)
+        self._set_unit_ticks(ax)
+        ax.set_box_aspect((1, 1, 1))
 
-        self.vis.add_depth_guides(ax, coords)
-        self.vis.add_projected_stimuli_3d(ax, names, coords, zoom=0.40,
-                                          border_width=8, label_size=12)
+        self.vis.add_depth_guides(ax, plot_coords)
+        self.vis.add_projected_stimuli_3d(
+            ax, names, plot_coords, zoom=0.40, border_width=8,
+            label_size=self.cfg.stimulus_number_size)
         ax.set(xlabel="X", ylabel="Y", zlabel="Z",
                title=f"Stimulus Arrangement 3D – {label}")
         plt.tight_layout()
@@ -568,21 +618,19 @@ class PlotFactory:
                                   stimulus_names, out_path: Path) -> None:
         """2D scatter of the Procrustes mean shape with stimulus images."""
         fig, ax = plt.subplots(figsize=(12, 12))
-        ax.scatter(mean_shape[:, 0], mean_shape[:, 1], alpha=0.0)
+        plot_shape = self._coords_to_unit_scale(mean_shape)
+        ax.scatter(plot_shape[:, 0], plot_shape[:, 1], alpha=0.0)
 
-        pad = 0.22
-        rx = (mean_shape[:, 0].max() - mean_shape[:, 0].min()) or 1
-        ry = (mean_shape[:, 1].max() - mean_shape[:, 1].min()) or 1
-        ax.set_xlim(mean_shape[:, 0].min() - pad * rx,
-                    mean_shape[:, 0].max() + pad * rx)
-        ax.set_ylim(mean_shape[:, 1].min() - pad * ry,
-                    mean_shape[:, 1].max() + pad * ry)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        self._set_unit_ticks(ax)
 
-        self.vis.add_stimuli_2d(ax, stimulus_names, mean_shape[:, 0],
-                                mean_shape[:, 1], zoom=0.32,
-                                border_width=8, label_size=12)
+        self.vis.add_stimuli_2d(ax, stimulus_names, plot_shape[:, 0],
+                                plot_shape[:, 1], zoom=0.32,
+                                border_width=8,
+                                label_size=self.cfg.stimulus_number_size)
         ax.set(xlabel="X", ylabel="Y", title="Procrustes Mean Shape (2D)")
-        ax.set_aspect("equal", adjustable="datalim")
+        ax.set_aspect("equal", adjustable="box")
         ax.grid(True, linestyle=":", linewidth=0.5)
         plt.tight_layout()
         self._save(fig, out_path)
@@ -592,16 +640,20 @@ class PlotFactory:
         """3D scatter of the Procrustes mean shape with stimulus images."""
         fig = plt.figure(figsize=(12, 11))
         ax = fig.add_subplot(111, projection="3d")
+        plot_shape = self._coords_to_unit_scale(mean_shape)
 
-        ax.scatter(mean_shape[:, 0], mean_shape[:, 1], mean_shape[:, 2],
+        ax.scatter(plot_shape[:, 0], plot_shape[:, 1], plot_shape[:, 2], #type: ignore
                    s=0, alpha=0)
-        ax.set_xlim(-1, 1)
-        ax.set_ylim(1, -1)
-        ax.set_zlim(-1, 1)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_zlim(0, 1)
+        self._set_unit_ticks(ax)
+        ax.set_box_aspect((1, 1, 1))
 
-        self.vis.add_depth_guides(ax, mean_shape)
-        self.vis.add_projected_stimuli_3d(ax, stimulus_names, mean_shape,
-                                          zoom=0.40, border_width=8, label_size=12)
+        self.vis.add_depth_guides(ax, plot_shape)
+        self.vis.add_projected_stimuli_3d(
+            ax, stimulus_names, plot_shape, zoom=0.40, border_width=8,
+            label_size=self.cfg.stimulus_number_size)
         ax.set(xlabel="X", ylabel="Y", zlabel="Z",
                title="Procrustes Mean Shape (3D)")
         plt.tight_layout()
@@ -616,27 +668,29 @@ class PlotFactory:
         fig, ax = plt.subplots(figsize=(1.2 * n, 1.2 * n))
         border_width = 6
 
-        mask = np.triu(np.ones_like(d_matrix, dtype=bool), k=1)
+        mask = np.triu(np.ones_like(d_matrix, dtype=bool), k=0)
         masked = np.ma.array(d_matrix, mask=mask)
-        cmap = plt.cm.get_cmap("viridis").copy()
+        cmap = plt.get_cmap("viridis").copy()
         cmap.set_bad(color="white", alpha=0)
 
-        im = ax.imshow(masked, cmap=cmap)
+        im = ax.imshow(masked, cmap=cmap, vmin=0, vmax=1)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_xlim(-0.5, n - 0.5)
         ax.set_ylim(n - 0.5, -0.5)
 
-        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.colorbar(im, fraction=0.046, pad=0.04,
+                     ticks=np.linspace(0, 1, 6))
         plt.title("Dissimilarity Matrix (Euclidean Distance)")
         fig.canvas.draw()
 
         # Values inside cells.
         for i in range(n):
-            for j in range(i + 1):
+            for j in range(i):
                 colour = "white" if d_matrix[i, j] > d_matrix.max() * 0.5 else "black"
                 ax.text(j, i, f"{d_matrix[i, j]:.2f}",
-                        ha="center", va="center", color=colour, fontsize=10)
+                        ha="center", va="center", color=colour,
+                        fontsize=self.cfg.matrix_number_size)
 
         # Stimulus-image axis ticks.
         origin = np.asarray(ax.transData.transform((0, 0)), dtype=float)
@@ -665,7 +719,8 @@ class PlotFactory:
                                   annotation_clip=False)
             ax.add_artist(ab_x)
             ax.text(i, -0.1, lbl, transform=x_trans, ha="center", va="top",
-                    fontsize=10, fontweight="bold", color="black", clip_on=False)
+                    fontsize=self.cfg.stimulus_number_size, fontweight="bold",
+                    color="black", clip_on=False)
 
             if img_y is not None:
                 ab_y = AnnotationBbox(img_y, (-0.015, i), xycoords=y_trans,
@@ -673,7 +728,8 @@ class PlotFactory:
                                       annotation_clip=False)
                 ax.add_artist(ab_y)
                 ax.text(-0.1, i, lbl, transform=y_trans, ha="right", va="center",
-                        fontsize=10, fontweight="bold", color="black", clip_on=False)
+                        fontsize=self.cfg.stimulus_number_size, fontweight="bold",
+                        color="black", clip_on=False)
 
         self._save(fig, out_dir / f"{csv_name}.png")
 
@@ -689,7 +745,7 @@ class PlotFactory:
         mean_d = np.mean(disparities)
         ax.axhline(mean_d, color="red", linestyle="--", linewidth=2,
                     label=f"Mean: {mean_d:.4f}")
-        ax.set(xlabel="Participant", ylabel="Procrustes Disparity",
+        ax.set(xlabel="P", ylabel="Procrustes Disparity",
                title=f"Intersubject Consistency - {condition.upper()}\n"
                      f"(lower = more consistent)")
         ax.set_xticks(x)
@@ -718,27 +774,27 @@ class PlotFactory:
         if normalize and max_d > 0:
             vals = D / max_d
             cb_label = "Normalized disparity"
+            disp_max = 1.0
         else:
             vals = D.copy()
             cb_label = "Disparity"
-
-        disp_max = np.max(vals[off_diag]) if np.any(off_diag) else 1.0
-        if disp_max <= 0:
-            disp_max = 1.0
+            disp_max = np.max(vals[off_diag]) if np.any(off_diag) else 1.0
+            if disp_max <= 0:
+                disp_max = 1.0
 
         fig, ax = plt.subplots(figsize=(max(8, n * 0.8), max(8, n * 0.8)))
-        mask = np.triu(np.ones_like(D, dtype=bool), k=1)
+        mask = np.triu(np.ones_like(D, dtype=bool), k=0)
         masked = np.ma.array(vals, mask=mask)
-        cmap = plt.cm.get_cmap("viridis").copy()
+        cmap = plt.get_cmap("viridis").copy()
         cmap.set_bad(color="white", alpha=0)
 
         im = ax.imshow(masked, cmap=cmap, vmin=0, vmax=disp_max)
 
         for i in range(n):
-            for j in range(i + 1):
+            for j in range(i):
                 colour = "white" if vals[i, j] > disp_max * 0.5 else "black"
                 ax.text(j, i, f"{vals[i, j]:.3f}", ha="center", va="center",
-                        color=colour, fontsize=8)
+                        color=colour, fontsize=self.cfg.matrix_number_size)
 
         ax.set_xticks(np.arange(n))
         ax.set_yticks(np.arange(n))
@@ -747,7 +803,9 @@ class PlotFactory:
         ax.set_xlim(-0.5, n - 0.5)
         ax.set_ylim(n - 0.5, -0.5)
 
-        plt.colorbar(im, fraction=0.046, pad=0.04, label=cb_label)
+        cbar_ticks = np.linspace(0, 1, 6) if normalize else None
+        plt.colorbar(im, fraction=0.046, pad=0.04, label=cb_label,
+                     ticks=cbar_ticks)
         plt.title(f"Procrustes Dissimilarity Matrix - {condition.upper()}  "
                   f"(Mean disparity = {mean_d:.4f})")
         plt.tight_layout()
@@ -771,19 +829,19 @@ class PlotFactory:
         mean_rho = np.mean(corr[~np.eye(n, dtype=bool)])
 
         fig, ax = plt.subplots(figsize=(max(8, n * 0.8), max(8, n * 0.8)))
-        mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
+        mask = np.triu(np.ones_like(corr, dtype=bool), k=0)
         masked = np.ma.array(corr, mask=mask)
-        cmap = plt.cm.get_cmap("coolwarm").copy()
+        cmap = plt.get_cmap("coolwarm").copy()
         cmap.set_bad(color="white", alpha=0)
 
         im = ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
 
         for i in range(n):
-            for j in range(i + 1):
+            for j in range(i):
                 v = corr[i, j]
                 colour = "white" if abs(v) > 0.5 else "black"
                 ax.text(j, i, f"{v:.3f}", ha="center", va="center",
-                        color=colour, fontsize=8)
+                        color=colour, fontsize=self.cfg.matrix_number_size)
 
         ax.set_xticks(np.arange(n))
         ax.set_yticks(np.arange(n))
@@ -813,35 +871,40 @@ class PlotFactory:
 
         ref = np.asarray(all_ref)
         emb = np.asarray(all_emb)
+        plot_ref, plot_emb = self._normalize_pair(ref, emb)
 
         fig, ax = plt.subplots(figsize=(7, 7))
-        ax.scatter(ref, emb, alpha=0.45, s=18)
+        ax.scatter(plot_ref, plot_emb, alpha=0.45, s=18)
 
-        lo, hi = min(ref.min(), emb.min()), max(ref.max(), emb.max())
+        lo, hi = 0.0, 1.0
         ax.plot([lo, hi], [lo, hi], "r--", linewidth=2, label="Identity (y = x)")
 
         # Binned mean trend.
         bins = np.linspace(lo, hi, 25)
         centres, means = [], []
         for k in range(len(bins) - 1):
-            m = (ref >= bins[k]) & (ref < bins[k + 1])
+            m = (plot_ref >= bins[k]) & (plot_ref < bins[k + 1])
             if np.sum(m) > 0:
                 centres.append((bins[k] + bins[k + 1]) / 2)
-                means.append(np.mean(emb[m]))
+                means.append(np.mean(plot_emb[m]))
 
         # R² against fitted regression.
         r2 = 0.0
-        if len(ref) > 1:
-            coeffs = np.polyfit(ref, emb, 1)
-            pred = np.polyval(coeffs, ref)
-            ss_res = np.sum((emb - pred) ** 2)
-            ss_tot = np.sum((emb - np.mean(emb)) ** 2)
+        if len(plot_ref) > 1:
+            coeffs = np.polyfit(plot_ref, plot_emb, 1)
+            pred = np.polyval(coeffs, plot_ref)
+            ss_res = np.sum((plot_emb - pred) ** 2)
+            ss_tot = np.sum((plot_emb - np.mean(plot_emb)) ** 2)
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
         ax.plot(centres, means, linewidth=3,
                 label=f"Mean agreement trend (R²={r2:.3f})")
-        ax.set(xlabel="Consensus distance", ylabel="Participant distance",
+        ax.set(xlabel="Normalized consensus distance",
+               ylabel="Normalized participant distance",
                title=f"Shepard-like Agreement Plot ({condition.upper()})")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        self._set_unit_ticks(ax)
         ax.legend()
         ax.grid(True, linestyle=":", linewidth=0.6)
         plt.tight_layout()
@@ -900,7 +963,7 @@ class PlotFactory:
         ks = list(range(1, n))
 
         fig, ax = plt.subplots(figsize=(8, 5))
-        cmap = plt.cm.get_cmap("tab10", len(coords_list))
+        cmap = plt.get_cmap("tab10", len(coords_list))
 
         for idx, (D, Dc, name) in enumerate(zip(d_mats, d_loo, participant_names)):
             scores = [self.stats.knn_overlap(D, Dc, k) for k in ks]
@@ -910,7 +973,7 @@ class PlotFactory:
         ax.set(xlabel="k Nearest Neighbours", ylabel="Neighbour preservation",
                title=f"kNN Preservation per Participant ({condition.upper()})")
         ax.set_ylim(0, 1)
-        ax.legend(fontsize=7, loc="lower right")
+        ax.legend(fontsize=max(7, self.cfg.font_size - 3), loc="lower right")
         ax.grid(True, linestyle=":", linewidth=0.6)
         plt.tight_layout()
         self._save(fig, out_path, dpi=300)
@@ -932,7 +995,7 @@ class PlotFactory:
         mean_v = np.mean(vars_all, axis=0)
 
         if participant_names is None:
-            participant_names = [f"Participant {i + 1}" for i in range(len(vars_all))]
+            participant_names = [f"P {i + 1}" for i in range(len(vars_all))]
 
         fig, ax = plt.subplots(figsize=(6, 5))
         x_pos = np.arange(n_dims)
@@ -946,7 +1009,7 @@ class PlotFactory:
             offsets = np.linspace(-0.08, 0.08, len(vars_all))
             pt_x[order, d] += offsets
 
-        cmap = plt.cm.get_cmap("tab10", len(vars_all))
+        cmap = plt.get_cmap("tab10", len(vars_all))
         for p, pname in enumerate(participant_names):
             ax.scatter(pt_x[p], vars_all[p], color=cmap(p), edgecolor="black",
                        s=55, zorder=5, alpha=0.9, label=pname)
@@ -957,7 +1020,8 @@ class PlotFactory:
                title=f"Axis Variance ({condition.upper()})")
         ax.set_ylim(0, 1)
         ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
-        ax.legend(loc="upper right", fontsize=7, frameon=True)
+        ax.legend(loc="upper right", fontsize=max(7, self.cfg.font_size - 3),
+                  frameon=True)
         plt.tight_layout()
         self._save(fig, out_path, dpi=300)
 
@@ -1001,7 +1065,8 @@ class PlotFactory:
             y_off = 0.03 if rho >= 0 else -0.05
             va = "bottom" if rho >= 0 else "top"
             ax.text(bar.get_x() + bar.get_width() / 2, rho + y_off,
-                    f"{rho:.3f}", ha="center", va=va, fontsize=9)
+                    f"{rho:.3f}", ha="center", va=va,
+                    fontsize=self.cfg.matrix_number_size)
 
         ax.set_xticks(np.arange(len(rhos)))
         ax.set_xticklabels(labels, rotation=45, ha="right")
@@ -1016,22 +1081,27 @@ class PlotFactory:
     def shepard_single(self, v_ref, v_embed, label: str,
                        condition: str, out_path: Path) -> None:
         """Shepard diagram for a single participant against LOO consensus."""
+        plot_ref, plot_embed = self._normalize_pair(v_ref, v_embed)
         fig, ax = plt.subplots(figsize=(6, 6))
-        ax.scatter(v_ref, v_embed, alpha=0.5, s=20)
+        ax.scatter(plot_ref, plot_embed, alpha=0.5, s=20)
 
-        lo, hi = min(v_ref.min(), v_embed.min()), max(v_ref.max(), v_embed.max())
+        lo, hi = 0.0, 1.0
         ax.plot([lo, hi], [lo, hi], "r--", linewidth=1.5, label="Identity")
 
         r2 = 0.0
-        if len(v_ref) > 1:
-            coeffs = np.polyfit(v_ref, v_embed, 1)
-            pred = np.polyval(coeffs, v_ref)
-            ss_res = np.sum((v_embed - pred) ** 2)
-            ss_tot = np.sum((v_embed - np.mean(v_embed)) ** 2)
+        if len(plot_ref) > 1:
+            coeffs = np.polyfit(plot_ref, plot_embed, 1)
+            pred = np.polyval(coeffs, plot_ref)
+            ss_res = np.sum((plot_embed - pred) ** 2)
+            ss_tot = np.sum((plot_embed - np.mean(plot_embed)) ** 2)
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
-        ax.set(xlabel="Consensus distance", ylabel="Participant distance",
+        ax.set(xlabel="Normalized consensus distance",
+               ylabel="Normalized participant distance",
                title=f"Shepard – {label} ({condition.upper()})\nR² = {r2:.3f}")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        self._set_unit_ticks(ax)
         ax.legend()
         ax.grid(True, linestyle=":", linewidth=0.6)
         plt.tight_layout()
@@ -1046,7 +1116,8 @@ class PlotFactory:
         fig, ax = plt.subplots(figsize=(4, 4))
         ax.bar(dims, variance_ratios, color="steelblue", edgecolor="black")
         for i, val in enumerate(variance_ratios):
-            ax.text(i, val + 0.02, f"{val:.2f}", ha="center", fontsize=9)
+            ax.text(i, val + 0.02, f"{val:.2f}", ha="center",
+                    fontsize=self.cfg.matrix_number_size)
 
         ax.set(ylabel="Variance ratio",
                title=f"Axis Variance – {label} ({condition.upper()})")
@@ -1061,15 +1132,17 @@ class PlotFactory:
         rdm_2d = pdist(coords_2d, metric="euclidean")
         rdm_3d = pdist(coords_3d, metric="euclidean")
         rho = self.stats.extract_spearman_rho(spearmanr(rdm_2d, rdm_3d))
+        plot_2d, plot_3d = self._normalize_pair(rdm_2d, rdm_3d)
 
         fig, ax = plt.subplots(figsize=(6, 6))
-        ax.scatter(rdm_2d, rdm_3d, alpha=0.5, s=20, color="slateblue")
+        ax.scatter(plot_2d, plot_3d, alpha=0.5, s=20, color="slateblue")
 
-        lo, hi = min(rdm_2d.min(), rdm_3d.min()), max(rdm_2d.max(), rdm_3d.max())
-        ax.plot([lo, hi], [lo, hi], "r--", linewidth=1.5, alpha=0.5)
-
-        ax.set(xlabel="2D pairwise distance", ylabel="3D pairwise distance",
+        ax.set(xlabel="Normalized 2D pairwise distance",
+               ylabel="Normalized 3D pairwise distance",
                title=f"2D vs 3D RDM – {label}\nSpearman ρ = {rho:.3f}")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        self._set_unit_ticks(ax)
         ax.grid(True, linestyle=":", linewidth=0.6)
         plt.tight_layout()
         self._save(fig, out_path)
@@ -1109,11 +1182,7 @@ class AnalysisPipeline:
         )
         selected_participants = set(self.cfg.participants)
 
-        for idx, p_dir in enumerate(
-            _progress(participant_dirs, desc="Loading participants",
-                      unit="participant", dynamic_ncols=True),
-            start=1,
-        ):
+        for idx, p_dir in enumerate(participant_dirs, start=1):
             if selected_participants and idx not in selected_participants:
                 continue
             label = (f"Participant {idx}" if self.cfg.anonymous
@@ -1137,18 +1206,16 @@ class AnalysisPipeline:
 
     # ── condition-level analysis ──
 
-    def _run_condition(self, embeddings: list[Embedding],
-                       condition: str, out_dir: Path) -> None:
-        """Run the aggregated analysis suite for one condition (2d or 3d)."""
+    def _collect_condition_steps(self, embeddings: list[Embedding],
+                                  condition: str, out_dir: Path) -> list[tuple[str, Any]]:
+        """Collect plot-generation steps for one condition (2d or 3d)."""
         if len(embeddings) < 2:
-            return
-
-        print(f"\n--- {condition.upper()} analysis ---")
+            return []
 
         coords_list = [e[4] for e in embeddings]
         stimulus_names = embeddings[0][3]
         participant_names = [
-            f"Participant {e[0]}" if self.cfg.anonymous else e[1]
+            f"P {e[0]}" if self.cfg.anonymous else e[1]
             for e in embeddings
         ]
 
@@ -1161,9 +1228,8 @@ class AnalysisPipeline:
             disparities = [
                 self.stats.procrustes_rmse(mean_shape, a) for a in aligned
             ]
-            print(f"Mean disparity {condition.upper()}: {np.mean(disparities):.4f}")
 
-        steps = [
+        steps: list[Any] = [
             ("Intersubject consistency",
              lambda: self.plots.intersubject_consistency(
                  disparities, participant_names, condition,
@@ -1212,18 +1278,12 @@ class AnalysisPipeline:
                  out_dir / f"knn_individual_{condition}.png"))
             if self.cfg.selection.wants("knn") else None,
         ]
-        steps = [step for step in steps if step is not None]
-
-        progress = _progress(steps, desc=f"{condition.upper()} plots",
-                             unit="plot", dynamic_ncols=True)
-        for name, fn in progress:
-            _set_progress_label(progress, name)
-            fn()
+        return [step for step in steps if step is not None]
 
     # ── detailed per-participant analysis ──
 
-    def _run_detailed(self) -> None:
-        """Generate per-participant plots for selected participants."""
+    def _collect_detailed_steps(self) -> list[tuple[str, Any]]:
+        """Collect per-participant plot-generation steps."""
         selected = {e[0] for e in self.embeddings_2d} | {e[0] for e in self.embeddings_3d}
         want_dissimilarity = self.cfg.selection.wants("dissimilarity")
         want_arrangements = self.cfg.selection.wants("arrangements")
@@ -1238,7 +1298,9 @@ class AnalysisPipeline:
             want_axis_variance,
             want_rdm_similarity,
         )):
-            return
+            return []
+
+        all_steps: list[tuple[str, Any]] = []
 
         for cond, all_emb in [("2d", self.embeddings_2d),
                                ("3d", self.embeddings_3d)]:
@@ -1254,10 +1316,7 @@ class AnalysisPipeline:
             if want_shepard:
                 d_loo = self.stats.leave_one_out_consensus(d_mats)
 
-            for idx, emb in enumerate(
-                _progress(all_emb, desc=f"Detailed {cond.upper()}",
-                          unit="participant", dynamic_ncols=True)
-            ):
+            for idx, emb in enumerate(all_emb):
                 pid, pname, plabel, names, coords = emb
                 if pid not in selected:
                     continue
@@ -1267,60 +1326,79 @@ class AnalysisPipeline:
                 p_dir.mkdir(parents=True, exist_ok=True)
 
                 if want_dissimilarity:
-                    D = squareform(pdist(coords, metric="euclidean"))
-                    D_norm = D / D.max() if D.max() > 0 else D.copy()
-                    self.plots.dissimilarity_matrix(
-                        names, D_norm, f"dissimilarity_{cond}", p_dir)
+                    def _make_dissim(names=names, coords=coords,
+                                     cond=cond, p_dir=p_dir):
+                        D = squareform(pdist(coords, metric="euclidean"))
+                        D_norm = D / D.max() if D.max() > 0 else D.copy()
+                        self.plots.dissimilarity_matrix(
+                            names, D_norm, f"dissimilarity_{cond}", p_dir)
+                    all_steps.append(
+                        (f"Dissimilarity {plabel} ({cond.upper()})", _make_dissim))
 
                 if want_arrangements:
-                    if cond == "2d":
-                        self.plots.participant_arrangement_2d(
-                            names, coords, plabel,
-                            p_dir / f"arrangement_{cond}.png")
-                    else:
-                        self.plots.participant_arrangement_3d(
-                            names, coords, plabel,
-                            p_dir / f"arrangement_{cond}.png")
+                    def _make_arr(names=names, coords=coords, plabel=plabel,
+                                  p_dir=p_dir, cond=cond):
+                        if cond == "2d":
+                            self.plots.participant_arrangement_2d(
+                                names, coords, plabel,
+                                p_dir / f"arrangement_{cond}.png")
+                        else:
+                            self.plots.participant_arrangement_3d(
+                                names, coords, plabel,
+                                p_dir / f"arrangement_{cond}.png")
+                    all_steps.append(
+                        (f"Arrangement {plabel} ({cond.upper()})", _make_arr))
 
                 if want_shepard and d_mats and d_loo:
                     v_ref = squareform(d_loo[idx], checks=False)
                     v_emb = squareform(d_mats[idx], checks=False)
-                    self.plots.shepard_single(
-                        v_ref, v_emb, plabel, cond,
-                        p_dir / f"shepard_{cond}.png")
+                    def _make_shep(v_ref=v_ref, v_emb=v_emb, plabel=plabel,
+                                   cond=cond, p_dir=p_dir):
+                        self.plots.shepard_single(
+                            v_ref, v_emb, plabel, cond,
+                            p_dir / f"shepard_{cond}.png")
+                    all_steps.append(
+                        (f"Shepard {plabel} ({cond.upper()})", _make_shep))
 
                 if want_axis_variance:
-                    v = np.var(coords, axis=0)
-                    v = v / np.sum(v)
-                    self.plots.axis_variance_single(
-                        v, plabel, cond,
-                        p_dir / f"axis_variance_{cond}.png")
+                    def _make_axvar(coords=coords, plabel=plabel,
+                                    cond=cond, p_dir=p_dir):
+                        v = np.var(coords, axis=0)
+                        v = v / np.sum(v)
+                        self.plots.axis_variance_single(
+                            v, plabel, cond,
+                            p_dir / f"axis_variance_{cond}.png")
+                    all_steps.append(
+                        (f"Axis variance {plabel} ({cond.upper()})", _make_axvar))
 
         # Cross-dimensional RDM scatter per participant.
-        if not want_rdm_similarity:
-            return
+        if want_rdm_similarity:
+            by_2d = {e[0]: e for e in self.embeddings_2d}
+            by_3d = {e[0]: e for e in self.embeddings_3d}
+            common = sorted(selected & set(by_2d) & set(by_3d))
 
-        by_2d = {e[0]: e for e in self.embeddings_2d}
-        by_3d = {e[0]: e for e in self.embeddings_3d}
-        common = sorted(selected & set(by_2d) & set(by_3d))
+            for pid in common:
+                e2, e3 = by_2d[pid], by_3d[pid]
+                plabel = e2[2]
+                names_2d, coords_2d = e2[3], e2[4]
+                names_3d, coords_3d = e3[3], e3[4]
 
-        for pid in common:
-            e2, e3 = by_2d[pid], by_3d[pid]
-            plabel = e2[2]
-            names_2d, coords_2d = e2[3], e2[4]
-            names_3d, coords_3d = e3[3], e3[4]
+                c3_map = dict(zip(names_3d, coords_3d))
+                shared = [n for n in names_2d if n in c3_map]
+                if len(shared) < 2:
+                    continue
 
-            c3_map = dict(zip(names_3d, coords_3d))
-            shared = [n for n in names_2d if n in c3_map]
-            if len(shared) < 2:
-                continue
+                ord_2d = np.asarray([coords_2d[names_2d.index(n)] for n in shared])
+                ord_3d = np.asarray([c3_map[n] for n in shared])
 
-            ord_2d = np.asarray([coords_2d[names_2d.index(n)] for n in shared])
-            ord_3d = np.asarray([c3_map[n] for n in shared])
+                p_dir = self.cfg.detailed_dir / plabel.replace(" ", "_")
+                def _make_rdm(ord_2d=ord_2d, ord_3d=ord_3d,
+                               plabel=plabel, p_dir=p_dir):
+                    self.plots.rdm_scatter_single(
+                        ord_2d, ord_3d, plabel, p_dir / "rdm_scatter.png")
+                all_steps.append((f"RDM scatter {plabel}", _make_rdm))
 
-            p_dir = self.cfg.detailed_dir / plabel.replace(" ", "_")
-            self.plots.rdm_scatter_single(
-                ord_2d, ord_3d, plabel, p_dir / "rdm_scatter.png")
+        return all_steps
 
     # ── main entry point ──
 
@@ -1332,30 +1410,38 @@ class AnalysisPipeline:
                   self.cfg.detailed_dir):
             d.mkdir(parents=True, exist_ok=True)
 
-        # Phase 1: Load data.
+        # Phase 1: Load data (silent).
         self.load_all_participants()
 
-        # Phase 2: General aggregated analysis.
-        self._run_condition(self.embeddings_2d, "2d", self.cfg.general_2d_dir)
-        self._run_condition(self.embeddings_3d, "3d", self.cfg.general_3d_dir)
+        # Phase 2 + 3: Collect all plot steps.
+        all_steps: list[tuple[str, Any]] = []
+        all_steps += self._collect_condition_steps(
+            self.embeddings_2d, "2d", self.cfg.general_2d_dir)
+        all_steps += self._collect_condition_steps(
+            self.embeddings_3d, "3d", self.cfg.general_3d_dir)
 
-        # Combined kNN (2D vs 3D).
         if (self.cfg.selection.wants("knn") and
                 len(self.embeddings_2d) >= 2 and len(self.embeddings_3d) >= 2):
-            self.plots.knn_combined(
+            all_steps.append(("kNN 2D vs 3D", lambda: self.plots.knn_combined(
                 [e[4] for e in self.embeddings_2d],
                 [e[4] for e in self.embeddings_3d],
-                self.cfg.general_dir / "knn_preservation_2d_vs_3d.png")
+                self.cfg.general_dir / "knn_preservation_2d_vs_3d.png")))
 
-        # Cross-dimensional RDM bar chart.
         if (self.cfg.selection.wants("rdm_similarity") and
                 self.embeddings_2d and self.embeddings_3d):
-            self.plots.crossdimensional_rdm_similarity(
-                self.embeddings_2d, self.embeddings_3d,
-                self.cfg.general_dir / "rdm_similarity_2d_vs_3d.png")
+            all_steps.append(("RDM similarity 2D vs 3D",
+                               lambda: self.plots.crossdimensional_rdm_similarity(
+                                   self.embeddings_2d, self.embeddings_3d,
+                                   self.cfg.general_dir / "rdm_similarity_2d_vs_3d.png")))
 
-        # Phase 3: Per-participant detailed analysis.
-        self._run_detailed()
+        all_steps += self._collect_detailed_steps()
+
+        # Execute all steps with a single progress bar.
+        progress = _progress(all_steps, desc="Generating plots",
+                             unit="plot", dynamic_ncols=True)
+        for name, fn in progress:
+            _set_progress_label(progress, name)
+            fn()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1389,8 +1475,46 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--normalize-procrustes",
+        dest="normalize_procrustes",
         action="store_true",
+        default=True,
         help="Normalize the Procrustes dissimilarity matrix to [0, 1].",
+    )
+    parser.add_argument(
+        "--raw-procrustes",
+        dest="normalize_procrustes",
+        action="store_false",
+        help="Use raw Procrustes dissimilarity values instead of [0, 1].",
+    )
+    parser.add_argument(
+        "--font-size",
+        type=int,
+        default=14,
+        help="Base font size for plot labels.",
+    )
+    parser.add_argument(
+        "--title-font-size",
+        type=int,
+        default=16,
+        help="Font size for plot titles.",
+    )
+    parser.add_argument(
+        "--scale-number-size",
+        type=int,
+        default=12,
+        help="Font size for axis and colorbar scale numbers.",
+    )
+    parser.add_argument(
+        "--stimulus-number-size",
+        type=int,
+        default=12,
+        help="Font size for stimulus number labels.",
+    )
+    parser.add_argument(
+        "--matrix-number-size",
+        type=int,
+        default=10,
+        help="Font size for numbers inside heatmap/bar plots.",
     )
     parser.add_argument(
         "--named-participants",
@@ -1470,6 +1594,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         anonymous=not args.named_participants,
         participants=args.participants,
         normalize_procrustes=args.normalize_procrustes,
+        font_size=args.font_size,
+        title_font_size=args.title_font_size,
+        scale_number_size=args.scale_number_size,
+        stimulus_number_size=args.stimulus_number_size,
+        matrix_number_size=args.matrix_number_size,
         selection=_selection_from_args(args),
     )
     pipeline = AnalysisPipeline(config)
