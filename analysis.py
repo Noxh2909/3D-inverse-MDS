@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any, Sequence, cast
 
 import numpy as np
+from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from mpl_toolkits.mplot3d import proj3d  # noqa: F401 – required for 3D projection
 from PIL import Image, ImageOps
 from scipy.spatial import procrustes
@@ -26,6 +28,7 @@ from scipy.spatial.distance import pdist, squareform
 from scipy.stats import spearmanr
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
 
 try:
     from tqdm.auto import tqdm as _tqdm
@@ -68,11 +71,24 @@ class AnalysisConfig:
     normalize_procrustes: bool = True
 
     # Plot font controls.
-    font_size: int = 14
-    title_font_size: int = 16
-    scale_number_size: int = 16
+    font_size: int = 18
+    title_font_size: int = 12
+    scale_number_size: int = 12
     stimulus_number_size: int = 16
     matrix_number_size: int = 10
+     
+    rdm_axis_font_size: int = 30
+    rdm_scale_font_size: int = 40
+    rdm_legend_font_size: int = 25
+    
+    pro_rdm_axis_font_size: int = 20
+    pro_rdm_scale_font_size: int = 20
+    pro_rdm_legend_font_size: int = 20
+    
+    spr_rdm_axis_font_size: int = 20
+    spr_rdm_scale_font_size: int = 20
+    spr_rdm_legend_font_size: int = 20
+    
 
     # Select which analysis modules should run.
     selection: AnalysisSelection = field(default_factory=AnalysisSelection)
@@ -544,19 +560,74 @@ class PlotFactory:
         if hasattr(ax, "set_zticks"):
             ax.set_zticks(ticks)
 
+    def _set_signed_unit_ticks(self, ax, avoid_2d_corner_overlap: bool = False) -> None:
+        ticks = np.linspace(-1, 1, 5)
+        tick_labels = [f"{tick:.1f}" for tick in ticks]
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
+        if avoid_2d_corner_overlap and not hasattr(ax, "zaxis"):
+            ax.set_xticklabels(["", *tick_labels[1:]])
+            ax.set_yticklabels(tick_labels)
+        if hasattr(ax, "set_zticks"):
+            ax.set_zticks(ticks)
+        ax.tick_params(axis="both", pad=8)
+
+    def _style_colorbar(self, cbar, value_format: str | None = None,
+                        tick_size: int | None = None,
+                        label_size: int | None = None) -> None:
+        tick_size = tick_size or self.cfg.scale_number_size
+        label_size = label_size or self.cfg.font_size
+        setattr(cbar.ax, "_analysis_tick_label_size", tick_size)
+        cbar.ax.tick_params(labelsize=tick_size)
+        cbar.ax.yaxis.label.set_fontsize(label_size)
+        if value_format is not None:
+            cbar.ax.yaxis.set_major_formatter(FormatStrFormatter(value_format))
+
+    def _add_rdm_colorbar(self, ax, im, ticks, value_format: str | None,
+                          label: str = "", axis_font_size: int | None = None,
+                          scale_font_size: int | None = None) -> Any:
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="2.2%", pad=0.35)
+        cbar = ax.figure.colorbar(im, cax=cax, ticks=ticks)
+        if label:
+            cbar.set_label(label)
+        self._style_colorbar(
+            cbar,
+            value_format,
+            tick_size=scale_font_size or self.cfg.rdm_scale_font_size,
+            label_size=axis_font_size or self.cfg.rdm_axis_font_size,
+        )
+        return cbar
+
+    def _add_metric_legend(self, ax, label: str,
+                           legend_font_size: int | None = None) -> None:
+        handle = Line2D([], [], linestyle="none", label=label)
+        ax.legend(handles=[handle], loc="upper right", frameon=True,
+                  handlelength=0, handletextpad=0, borderpad=0.35)
+        setattr(ax, "_analysis_legend_font_size",
+                legend_font_size or self.cfg.rdm_legend_font_size)
+
     def _style_figure_fonts(self, fig) -> None:
         for ax in fig.axes:
+            ax.set_title("")
             ax.title.set_fontsize(self.cfg.title_font_size)
             ax.xaxis.label.set_fontsize(self.cfg.font_size)
             ax.yaxis.label.set_fontsize(self.cfg.font_size)
-            ax.tick_params(axis="both", labelsize=self.cfg.scale_number_size)
+            ax.xaxis.labelpad = max(ax.xaxis.labelpad, 8)
+            ax.yaxis.labelpad = max(ax.yaxis.labelpad, 8)
+            tick_size = getattr(ax, "_analysis_tick_label_size",
+                                self.cfg.scale_number_size)
+            ax.tick_params(axis="both", labelsize=tick_size, pad=8)
             if hasattr(ax, "zaxis"):
                 ax.zaxis.label.set_fontsize(self.cfg.font_size)
-                ax.zaxis.set_tick_params(labelsize=self.cfg.scale_number_size)
+                ax.zaxis.labelpad = max(ax.zaxis.labelpad, 8)
+                ax.zaxis.set_tick_params(labelsize=tick_size, pad=6)
             legend = ax.get_legend()
             if legend is not None:
+                legend_size = getattr(ax, "_analysis_legend_font_size",
+                                      max(7, self.cfg.font_size - 3))
                 for text in legend.get_texts():
-                    text.set_fontsize(max(7, self.cfg.font_size - 3))
+                    text.set_fontsize(legend_size)
 
     def _save(self, fig, path: Path, dpi: int = 200, **kwargs) -> None:
         """Save a figure and close it."""
@@ -570,19 +641,17 @@ class PlotFactory:
                                    out_path: Path) -> None:
         """2D scatter of stimuli as placed by one participant."""
         fig, ax = plt.subplots(figsize=(8, 8))
-        plot_coords = self._coords_to_unit_scale(coords)
-        x, y = plot_coords[:, 0], plot_coords[:, 1]
+        x, y = coords[:, 0], coords[:, 1]
         ax.scatter(x, y, alpha=0.0)
 
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        self._set_unit_ticks(ax)
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        self._set_signed_unit_ticks(ax, avoid_2d_corner_overlap=True)
 
         self.vis.add_stimuli_2d(ax, names, x, y, zoom=0.40,
                                 border_width=8,
                                 label_size=self.cfg.stimulus_number_size)
-        ax.set(xlabel="X", ylabel="Y",
-               title=f"Stimulus Arrangement 2D – {label}")
+        ax.set(xlabel="X", ylabel="Y")
         ax.set_aspect("equal", adjustable="box")
         ax.grid(True, linestyle=":", linewidth=0.5)
         plt.tight_layout()
@@ -593,22 +662,20 @@ class PlotFactory:
         """3D scatter of stimuli as placed by one participant."""
         fig = plt.figure(figsize=(11, 10))
         ax = fig.add_subplot(111, projection="3d")
-        plot_coords = self._coords_to_unit_scale(coords)
-        x, y, z = plot_coords[:, 0], plot_coords[:, 1], plot_coords[:, 2]
+        x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
 
         ax.scatter(x, y, z, s=0, alpha=0)  # type: ignore
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_zlim(0, 1)
-        self._set_unit_ticks(ax)
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        ax.set_zlim(-1, 1)
+        self._set_signed_unit_ticks(ax)
         ax.set_box_aspect((1, 1, 1))
 
-        self.vis.add_depth_guides(ax, plot_coords)
+        self.vis.add_depth_guides(ax, coords)
         self.vis.add_projected_stimuli_3d(
-            ax, names, plot_coords, zoom=0.40, border_width=8,
+            ax, names, coords, zoom=0.40, border_width=8,
             label_size=self.cfg.stimulus_number_size)
-        ax.set(xlabel="X", ylabel="Y", zlabel="Z",
-               title=f"Stimulus Arrangement 3D – {label}")
+        ax.set(xlabel="X", ylabel="Y", zlabel="Z")
         plt.tight_layout()
         self._save(fig, out_path)
 
@@ -618,18 +685,17 @@ class PlotFactory:
                                   stimulus_names, out_path: Path) -> None:
         """2D scatter of the Procrustes mean shape with stimulus images."""
         fig, ax = plt.subplots(figsize=(12, 12))
-        plot_shape = self._coords_to_unit_scale(mean_shape)
-        ax.scatter(plot_shape[:, 0], plot_shape[:, 1], alpha=0.0)
+        ax.scatter(mean_shape[:, 0], mean_shape[:, 1], alpha=0.0)
 
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        self._set_unit_ticks(ax)
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        self._set_signed_unit_ticks(ax, avoid_2d_corner_overlap=True)
 
-        self.vis.add_stimuli_2d(ax, stimulus_names, plot_shape[:, 0],
-                                plot_shape[:, 1], zoom=0.32,
+        self.vis.add_stimuli_2d(ax, stimulus_names, mean_shape[:, 0],
+                                mean_shape[:, 1], zoom=0.32,
                                 border_width=8,
                                 label_size=self.cfg.stimulus_number_size)
-        ax.set(xlabel="X", ylabel="Y", title="Procrustes Mean Shape (2D)")
+        ax.set(xlabel="X", ylabel="Y")
         ax.set_aspect("equal", adjustable="box")
         ax.grid(True, linestyle=":", linewidth=0.5)
         plt.tight_layout()
@@ -640,22 +706,20 @@ class PlotFactory:
         """3D scatter of the Procrustes mean shape with stimulus images."""
         fig = plt.figure(figsize=(12, 11))
         ax = fig.add_subplot(111, projection="3d")
-        plot_shape = self._coords_to_unit_scale(mean_shape)
 
-        ax.scatter(plot_shape[:, 0], plot_shape[:, 1], plot_shape[:, 2], #type: ignore
+        ax.scatter(mean_shape[:, 0], mean_shape[:, 1], mean_shape[:, 2], #type: ignore
                    s=0, alpha=0)
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_zlim(0, 1)
-        self._set_unit_ticks(ax)
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        ax.set_zlim(-1, 1)
+        self._set_signed_unit_ticks(ax)
         ax.set_box_aspect((1, 1, 1))
 
-        self.vis.add_depth_guides(ax, plot_shape)
+        self.vis.add_depth_guides(ax, mean_shape)
         self.vis.add_projected_stimuli_3d(
-            ax, stimulus_names, plot_shape, zoom=0.40, border_width=8,
+            ax, stimulus_names, mean_shape, zoom=0.40, border_width=8,
             label_size=self.cfg.stimulus_number_size)
-        ax.set(xlabel="X", ylabel="Y", zlabel="Z",
-               title="Procrustes Mean Shape (3D)")
+        ax.set(xlabel="X", ylabel="Y", zlabel="Z")
         plt.tight_layout()
         self._save(fig, out_path)
 
@@ -679,18 +743,9 @@ class PlotFactory:
         ax.set_xlim(-0.5, n - 0.5)
         ax.set_ylim(n - 0.5, -0.5)
 
-        plt.colorbar(im, fraction=0.046, pad=0.04,
-                     ticks=np.linspace(0, 1, 6))
-        plt.title("Dissimilarity Matrix (Euclidean Distance)")
+        self._add_rdm_colorbar(ax, im, ticks=[0.0, 0.5, 1.0],
+                               value_format="%.1f")
         fig.canvas.draw()
-
-        # Values inside cells.
-        for i in range(n):
-            for j in range(i):
-                colour = "white" if d_matrix[i, j] > d_matrix.max() * 0.5 else "black"
-                ax.text(j, i, f"{d_matrix[i, j]:.2f}",
-                        ha="center", va="center", color=colour,
-                        fontsize=self.cfg.matrix_number_size)
 
         # Stimulus-image axis ticks.
         origin = np.asarray(ax.transData.transform((0, 0)), dtype=float)
@@ -719,7 +774,7 @@ class PlotFactory:
                                   annotation_clip=False)
             ax.add_artist(ab_x)
             ax.text(i, -0.1, lbl, transform=x_trans, ha="center", va="top",
-                    fontsize=self.cfg.stimulus_number_size, fontweight="bold",
+                    fontsize=self.cfg.rdm_axis_font_size, fontweight="bold",
                     color="black", clip_on=False)
 
             if img_y is not None:
@@ -728,7 +783,7 @@ class PlotFactory:
                                       annotation_clip=False)
                 ax.add_artist(ab_y)
                 ax.text(-0.1, i, lbl, transform=y_trans, ha="right", va="center",
-                        fontsize=self.cfg.stimulus_number_size, fontweight="bold",
+                        fontsize=self.cfg.rdm_axis_font_size, fontweight="bold",
                         color="black", clip_on=False)
 
         self._save(fig, out_dir / f"{csv_name}.png")
@@ -745,9 +800,7 @@ class PlotFactory:
         mean_d = np.mean(disparities)
         ax.axhline(mean_d, color="red", linestyle="--", linewidth=2,
                     label=f"Mean: {mean_d:.4f}")
-        ax.set(xlabel="P", ylabel="Procrustes Disparity",
-               title=f"Intersubject Consistency - {condition.upper()}\n"
-                     f"(lower = more consistent)")
+        ax.set(xlabel="P", ylabel="Procrustes Disparity")
         ax.set_xticks(x)
         ax.set_xticklabels(participant_names, rotation=45, ha="right")
         ax.legend()
@@ -790,24 +843,25 @@ class PlotFactory:
 
         im = ax.imshow(masked, cmap=cmap, vmin=0, vmax=disp_max)
 
-        for i in range(n):
-            for j in range(i):
-                colour = "white" if vals[i, j] > disp_max * 0.5 else "black"
-                ax.text(j, i, f"{vals[i, j]:.3f}", ha="center", va="center",
-                        color=colour, fontsize=self.cfg.matrix_number_size)
-
         ax.set_xticks(np.arange(n))
         ax.set_yticks(np.arange(n))
         ax.set_xticklabels(participant_names, rotation=45, ha="right")
         ax.set_yticklabels(participant_names)
+        setattr(ax, "_analysis_tick_label_size", self.cfg.pro_rdm_axis_font_size)
         ax.set_xlim(-0.5, n - 0.5)
         ax.set_ylim(n - 0.5, -0.5)
 
-        cbar_ticks = np.linspace(0, 1, 6) if normalize else None
-        plt.colorbar(im, fraction=0.046, pad=0.04, label=cb_label,
-                     ticks=cbar_ticks)
-        plt.title(f"Procrustes Dissimilarity Matrix - {condition.upper()}  "
-                  f"(Mean disparity = {mean_d:.4f})")
+        cbar_ticks = [0.0, 0.5, 1.0] if normalize else None
+        cbar_label = "" if normalize else cb_label
+        self._add_rdm_colorbar(
+            ax, im, ticks=cbar_ticks, value_format="%.1f" if normalize else None,
+            label=cbar_label,
+            axis_font_size=self.cfg.pro_rdm_axis_font_size,
+            scale_font_size=self.cfg.pro_rdm_scale_font_size,
+        )
+        self._add_metric_legend(
+            ax, f"Mean disparity = {mean_d:.4f}",
+            legend_font_size=self.cfg.pro_rdm_legend_font_size)
         plt.tight_layout()
         self._save(fig, out_path)
 
@@ -836,23 +890,22 @@ class PlotFactory:
 
         im = ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
 
-        for i in range(n):
-            for j in range(i):
-                v = corr[i, j]
-                colour = "white" if abs(v) > 0.5 else "black"
-                ax.text(j, i, f"{v:.3f}", ha="center", va="center",
-                        color=colour, fontsize=self.cfg.matrix_number_size)
-
         ax.set_xticks(np.arange(n))
         ax.set_yticks(np.arange(n))
         ax.set_xticklabels(participant_names, rotation=45, ha="right")
         ax.set_yticklabels(participant_names)
+        setattr(ax, "_analysis_tick_label_size", self.cfg.spr_rdm_axis_font_size)
         ax.set_xlim(-0.5, n - 0.5)
         ax.set_ylim(n - 0.5, -0.5)
 
-        plt.colorbar(im, fraction=0.046, pad=0.04, label="Spearman ρ")
-        plt.title(f"Spearman Intersubject Consistency - {condition.upper()}  "
-                  f"(Mean ρ = {mean_rho:.4f})")
+        self._add_rdm_colorbar(
+            ax, im, ticks=[-1.0, 0.0, 1.0], value_format="%.1f",
+            axis_font_size=self.cfg.spr_rdm_axis_font_size,
+            scale_font_size=self.cfg.spr_rdm_scale_font_size,
+        )
+        self._add_metric_legend(
+            ax, f"Mean ρ = {mean_rho:.4f}",
+            legend_font_size=self.cfg.spr_rdm_legend_font_size)
         plt.tight_layout()
         self._save(fig, out_path)
 
@@ -900,8 +953,7 @@ class PlotFactory:
         ax.plot(centres, means, linewidth=3,
                 label=f"Mean agreement trend (R²={r2:.3f})")
         ax.set(xlabel="Normalized consensus distance",
-               ylabel="Normalized participant distance",
-               title=f"Shepard-like Agreement Plot ({condition.upper()})")
+               ylabel="Normalized participant distance")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         self._set_unit_ticks(ax)
@@ -931,8 +983,7 @@ class PlotFactory:
 
         fig, ax = plt.subplots(figsize=(7, 5))
         ax.plot(ks, scores, marker="o")
-        ax.set(xlabel="k Nearest Neighbours", ylabel="Neighbour preservation",
-               title=f"kNN Preservation Curve ({condition.upper()})")
+        ax.set(xlabel="k Nearest Neighbours", ylabel="Neighbour preservation")
         ax.set_ylim(0, 1)
         ax.grid(True, linestyle=":", linewidth=0.6)
         plt.tight_layout()
@@ -946,8 +997,7 @@ class PlotFactory:
         fig, ax = plt.subplots(figsize=(7, 5))
         ax.plot(ks_2d, sc_2d, marker="o", label="2D")
         ax.plot(ks_3d, sc_3d, marker="s", label="3D")
-        ax.set(xlabel="k Nearest Neighbours", ylabel="Neighbour preservation",
-               title="kNN Preservation Curve (2D vs 3D)")
+        ax.set(xlabel="k Nearest Neighbours", ylabel="Neighbour preservation")
         ax.set_ylim(0, 1)
         ax.legend()
         ax.grid(True, linestyle=":", linewidth=0.6)
@@ -970,8 +1020,7 @@ class PlotFactory:
             ax.plot(ks, scores, marker=".", markersize=4,
                     label=name, color=cmap(idx), alpha=0.8)
 
-        ax.set(xlabel="k Nearest Neighbours", ylabel="Neighbour preservation",
-               title=f"kNN Preservation per Participant ({condition.upper()})")
+        ax.set(xlabel="k Nearest Neighbours", ylabel="Neighbour preservation")
         ax.set_ylim(0, 1)
         ax.legend(fontsize=max(7, self.cfg.font_size - 3), loc="lower right")
         ax.grid(True, linestyle=":", linewidth=0.6)
@@ -1016,11 +1065,12 @@ class PlotFactory:
 
         ax.set_xticks(x_pos)
         ax.set_xticklabels(dims)
-        ax.set(ylabel="Variance ratio",
-               title=f"Axis Variance ({condition.upper()})")
+        ax.set(ylabel="Variance ratio")
         ax.set_ylim(0, 1)
         ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
-        ax.legend(loc="upper right", fontsize=max(7, self.cfg.font_size - 3),
+        legend_cols = min(len(participant_names) + 1, 6)
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.02),
+                  ncol=legend_cols, fontsize=max(7, self.cfg.font_size - 3),
                   frameon=True)
         plt.tight_layout()
         self._save(fig, out_path, dpi=300)
@@ -1070,7 +1120,7 @@ class PlotFactory:
 
         ax.set_xticks(np.arange(len(rhos)))
         ax.set_xticklabels(labels, rotation=45, ha="right")
-        ax.set(ylabel="Spearman ρ", title="2D vs 3D RDM Similarity")
+        ax.set(ylabel="Spearman ρ")
         ax.set_ylim(-1, 1)
         ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
         plt.tight_layout()
@@ -1097,8 +1147,7 @@ class PlotFactory:
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
         ax.set(xlabel="Normalized consensus distance",
-               ylabel="Normalized participant distance",
-               title=f"Shepard – {label} ({condition.upper()})\nR² = {r2:.3f}")
+               ylabel="Normalized participant distance")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         self._set_unit_ticks(ax)
@@ -1119,8 +1168,7 @@ class PlotFactory:
             ax.text(i, val + 0.02, f"{val:.2f}", ha="center",
                     fontsize=self.cfg.matrix_number_size)
 
-        ax.set(ylabel="Variance ratio",
-               title=f"Axis Variance – {label} ({condition.upper()})")
+        ax.set(ylabel="Variance ratio")
         ax.set_ylim(0, 1)
         ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
         plt.tight_layout()
@@ -1138,8 +1186,7 @@ class PlotFactory:
         ax.scatter(plot_2d, plot_3d, alpha=0.5, s=20, color="slateblue")
 
         ax.set(xlabel="Normalized 2D pairwise distance",
-               ylabel="Normalized 3D pairwise distance",
-               title=f"2D vs 3D RDM – {label}\nSpearman ρ = {rho:.3f}")
+               ylabel="Normalized 3D pairwise distance")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         self._set_unit_ticks(ax)
@@ -1489,32 +1536,88 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--font-size",
         type=int,
-        default=14,
+        default=None,
         help="Base font size for plot labels.",
     )
     parser.add_argument(
         "--title-font-size",
         type=int,
-        default=16,
+        default=None,
         help="Font size for plot titles.",
     )
     parser.add_argument(
         "--scale-number-size",
         type=int,
-        default=12,
-        help="Font size for axis and colorbar scale numbers.",
+        default=None,
+        help="Font size for ordinary axis scale numbers.",
     )
     parser.add_argument(
         "--stimulus-number-size",
         type=int,
-        default=12,
-        help="Font size for stimulus number labels.",
+        default=None,
+        help="Font size for ordinary stimulus number labels.",
+    )
+    parser.add_argument(
+        "--rdm-axis-font-size", "--rdm-stimulus-number-size",
+        dest="rdm_axis_font_size",
+        type=int,
+        default=None,
+        help="Axis/tick/stimulus font size for Spearman, Procrustes and dissimilarity RDM plots.",
+    )
+    parser.add_argument(
+        "--rdm-scale-font-size", "--rdm-scale-number-size",
+        dest="rdm_scale_font_size",
+        type=int,
+        default=None,
+        help="Colorbar scale-number font size for Spearman, Procrustes and dissimilarity RDM plots.",
+    )
+    parser.add_argument(
+        "--rdm-legend-font-size",
+        type=int,
+        default=None,
+        help="Legend font size for Spearman and Procrustes RDM mean values.",
+    )
+    parser.add_argument(
+        "--pro-rdm-axis-font-size",
+        type=int,
+        default=None,
+        help="Axis/tick font size for Procrustes dissimilarity RDM plots.",
+    )
+    parser.add_argument(
+        "--pro-rdm-scale-font-size",
+        type=int,
+        default=None,
+        help="Colorbar scale-number font size for Procrustes dissimilarity RDM plots.",
+    )
+    parser.add_argument(
+        "--pro-rdm-legend-font-size",
+        type=int,
+        default=None,
+        help="Legend font size for Procrustes mean disparity.",
+    )
+    parser.add_argument(
+        "--spr-rdm-axis-font-size",
+        type=int,
+        default=None,
+        help="Axis/tick font size for Spearman consistency RDM plots.",
+    )
+    parser.add_argument(
+        "--spr-rdm-scale-font-size",
+        type=int,
+        default=None,
+        help="Colorbar scale-number font size for Spearman consistency RDM plots.",
+    )
+    parser.add_argument(
+        "--spr-rdm-legend-font-size",
+        type=int,
+        default=None,
+        help="Legend font size for Spearman mean rho.",
     )
     parser.add_argument(
         "--matrix-number-size",
         type=int,
-        default=10,
-        help="Font size for numbers inside heatmap/bar plots.",
+        default=None,
+        help="Font size for numeric annotations outside RDM heatmaps.",
     )
     parser.add_argument(
         "--named-participants",
@@ -1590,15 +1693,29 @@ def _selection_from_args(args: argparse.Namespace) -> AnalysisSelection:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the analysis pipeline."""
     args = parse_args(argv)
+
+    def cfg_value(name: str):
+        value = getattr(args, name)
+        return value if value is not None else getattr(AnalysisConfig, name)
+
     config = AnalysisConfig(
         anonymous=not args.named_participants,
         participants=args.participants,
         normalize_procrustes=args.normalize_procrustes,
-        font_size=args.font_size,
-        title_font_size=args.title_font_size,
-        scale_number_size=args.scale_number_size,
-        stimulus_number_size=args.stimulus_number_size,
-        matrix_number_size=args.matrix_number_size,
+        font_size=cfg_value("font_size"),
+        title_font_size=cfg_value("title_font_size"),
+        scale_number_size=cfg_value("scale_number_size"),
+        stimulus_number_size=cfg_value("stimulus_number_size"),
+        rdm_axis_font_size=cfg_value("rdm_axis_font_size"),
+        rdm_scale_font_size=cfg_value("rdm_scale_font_size"),
+        rdm_legend_font_size=cfg_value("rdm_legend_font_size"),
+        pro_rdm_axis_font_size=cfg_value("pro_rdm_axis_font_size"),
+        pro_rdm_scale_font_size=cfg_value("pro_rdm_scale_font_size"),
+        pro_rdm_legend_font_size=cfg_value("pro_rdm_legend_font_size"),
+        spr_rdm_axis_font_size=cfg_value("spr_rdm_axis_font_size"),
+        spr_rdm_scale_font_size=cfg_value("spr_rdm_scale_font_size"),
+        spr_rdm_legend_font_size=cfg_value("spr_rdm_legend_font_size"),
+        matrix_number_size=cfg_value("matrix_number_size"),
         selection=_selection_from_args(args),
     )
     pipeline = AnalysisPipeline(config)
