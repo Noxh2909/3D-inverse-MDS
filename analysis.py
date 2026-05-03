@@ -88,7 +88,8 @@ class AnalysisConfig:
     spr_rdm_axis_font_size: int = 20
     spr_rdm_scale_font_size: int = 20
     spr_rdm_legend_font_size: int = 20
-    
+
+    arrangement_axis_font_size: int = 25
 
     # Select which analysis modules should run.
     selection: AnalysisSelection = field(default_factory=AnalysisSelection)
@@ -560,7 +561,8 @@ class PlotFactory:
         if hasattr(ax, "set_zticks"):
             ax.set_zticks(ticks)
 
-    def _set_signed_unit_ticks(self, ax, avoid_2d_corner_overlap: bool = False) -> None:
+    def _set_signed_unit_ticks(self, ax, avoid_2d_corner_overlap: bool = False,
+                               avoid_3d_corner_overlap: bool = False) -> None:
         ticks = np.linspace(-1, 1, 5)
         tick_labels = [f"{tick:.1f}" for tick in ticks]
         ax.set_xticks(ticks)
@@ -570,6 +572,10 @@ class PlotFactory:
             ax.set_yticklabels(tick_labels)
         if hasattr(ax, "set_zticks"):
             ax.set_zticks(ticks)
+        if avoid_3d_corner_overlap and hasattr(ax, "zaxis"):
+            # Hide the last x-tick label (1.0) that visually collides with the
+            # last y-tick label (1.0) at the shared front-right corner.
+            ax.set_xticklabels([*tick_labels[:-1], ""])
         ax.tick_params(axis="both", pad=8)
 
     def _style_colorbar(self, cbar, value_format: str | None = None,
@@ -646,6 +652,7 @@ class PlotFactory:
 
         ax.set_xlim(-1, 1)
         ax.set_ylim(-1, 1)
+        setattr(ax, "_analysis_tick_label_size", self.cfg.arrangement_axis_font_size)
         self._set_signed_unit_ticks(ax, avoid_2d_corner_overlap=True)
 
         self.vis.add_stimuli_2d(ax, names, x, y, zoom=0.40,
@@ -668,8 +675,12 @@ class PlotFactory:
         ax.set_xlim(-1, 1)
         ax.set_ylim(-1, 1)
         ax.set_zlim(-1, 1)
-        self._set_signed_unit_ticks(ax)
+        setattr(ax, "_analysis_tick_label_size", self.cfg.arrangement_axis_font_size)
+        self._set_signed_unit_ticks(ax, avoid_3d_corner_overlap=True)
         ax.set_box_aspect((1, 1, 1))
+        ax.xaxis.labelpad = 20
+        ax.yaxis.labelpad = 20
+        ax.zaxis.labelpad = 20
 
         self.vis.add_depth_guides(ax, coords)
         self.vis.add_projected_stimuli_3d(
@@ -712,8 +723,11 @@ class PlotFactory:
         ax.set_xlim(-1, 1)
         ax.set_ylim(-1, 1)
         ax.set_zlim(-1, 1)
-        self._set_signed_unit_ticks(ax)
+        self._set_signed_unit_ticks(ax, avoid_3d_corner_overlap=True)
         ax.set_box_aspect((1, 1, 1))
+        ax.xaxis.labelpad = 20
+        ax.yaxis.labelpad = 20
+        ax.zaxis.labelpad = 20
 
         self.vis.add_depth_guides(ax, mean_shape)
         self.vis.add_projected_stimuli_3d(
@@ -1068,10 +1082,23 @@ class PlotFactory:
         ax.set(ylabel="Variance ratio")
         ax.set_ylim(0, 1)
         ax.grid(True, axis="y", linestyle=":", linewidth=0.6)
+        legend_font_size = max(7, self.cfg.font_size - 4)
         legend_cols = min(len(participant_names) + 1, 6)
-        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.02),
-                  ncol=legend_cols, fontsize=max(7, self.cfg.font_size - 3),
-                  frameon=True)
+        ax.legend(
+            loc="upper left",
+            bbox_to_anchor=(0.02, 0.98),
+            ncol=legend_cols,
+            fontsize=legend_font_size,
+            frameon=True,
+            borderaxespad=0,
+            borderpad=0.25,
+            handlelength=1.0,
+            handletextpad=0.3,
+            columnspacing=0.55,
+            labelspacing=0.2,
+            markerscale=0.8,
+        )
+        setattr(ax, "_analysis_legend_font_size", legend_font_size)
         plt.tight_layout()
         self._save(fig, out_path, dpi=300)
 
@@ -1146,12 +1173,13 @@ class PlotFactory:
             ss_tot = np.sum((plot_embed - np.mean(plot_embed)) ** 2)
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
+        r2_handle = Line2D([], [], linestyle="none", label=f"R\u00b2 = {r2:.3f}")
         ax.set(xlabel="Normalized consensus distance",
                ylabel="Normalized participant distance")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         self._set_unit_ticks(ax)
-        ax.legend()
+        ax.legend(handles=[ax.get_lines()[0], r2_handle])
         ax.grid(True, linestyle=":", linewidth=0.6)
         plt.tight_layout()
         self._save(fig, out_path)
@@ -1184,6 +1212,13 @@ class PlotFactory:
 
         fig, ax = plt.subplots(figsize=(6, 6))
         ax.scatter(plot_2d, plot_3d, alpha=0.5, s=20, color="slateblue")
+
+        lo, hi = 0.0, 1.0
+        ax.plot([lo, hi], [lo, hi], "r--", linewidth=1.5, label="Identity")
+
+        rho_handle = Line2D([], [], linestyle="none",
+                            label=f"Spearman \u03c1 = {rho:.3f}")
+        ax.legend(handles=[ax.get_lines()[0], rho_handle])
 
         ax.set(xlabel="Normalized 2D pairwise distance",
                ylabel="Normalized 3D pairwise distance")
@@ -1614,6 +1649,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Legend font size for Spearman mean rho.",
     )
     parser.add_argument(
+        "--arrangement-axis-font-size",
+        type=int,
+        default=None,
+        help="Axis/tick font size for per-participant arrangement plots (2D and 3D).",
+    )
+    parser.add_argument(
         "--matrix-number-size",
         type=int,
         default=None,
@@ -1715,6 +1756,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         spr_rdm_axis_font_size=cfg_value("spr_rdm_axis_font_size"),
         spr_rdm_scale_font_size=cfg_value("spr_rdm_scale_font_size"),
         spr_rdm_legend_font_size=cfg_value("spr_rdm_legend_font_size"),
+        arrangement_axis_font_size=cfg_value("arrangement_axis_font_size"),
         matrix_number_size=cfg_value("matrix_number_size"),
         selection=_selection_from_args(args),
     )

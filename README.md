@@ -58,6 +58,30 @@ The project uses, among others:
 
 The launcher `main.py` checks these packages automatically on startup and installs missing dependencies when possible in the current Python environment.
 
+## Complete pipeline
+
+The full workflow from data collection to analysis output follows these stages:
+
+```
+experiment.py                           # 1. data collection
+    └─ results/2d/<abbrev>_<ts>.csv     #    2D arrangement per participant
+    └─ results/3d/<abbrev>_<ts>.csv     #    3D arrangement per participant
+    └─ logs/<abbrev>/<abbrev>_log_<ts>.csv  # interaction log
+
+final_results/<abbrev>/                 # 2. curated dataset
+    2d/<abbrev>_<ts>.csv
+    3d/<abbrev>_<ts>.csv
+    logs/<abbrev>_log_<ts>.csv
+
+analysis.py                             # 3. analysis pipeline
+    └─ analysis/general/2d/             #    aggregated 2D outputs
+    └─ analysis/general/3d/             #    aggregated 3D outputs
+    └─ analysis/general/                #    cross-dimensional outputs
+    └─ analysis/detailed/Participant_X/ #    per-participant plots
+```
+
+`<abbrev>` is the participant abbreviation derived from the entered name: first letter of the first name followed by the first letter of the last name, separated by a dot (e.g. `N.K` for Noah Kogge). If more letters are needed to distinguish participants, additional characters from the last name are used (e.g. `E.Sc` vs. `E.S`).
+
 ## Running the experiment
 
 The experiment is started via the central launcher:
@@ -92,7 +116,9 @@ The flow follows the procedure described in the thesis:
 
 ### Where the data is written
 
-When run locally with Python, the experiment writes its output files to a writable project or app data directory. The analysis pipeline in this repository works with the curated structure under `final_results/`.
+When run locally with Python, the experiment writes its output files to a writable project or app data directory. The participant name entered in the GUI is automatically abbreviated (e.g. `Noah Kogge` → `N.K`). Output filenames and log folders use this abbreviation instead of the full name.
+
+The analysis pipeline in this repository works with the curated structure under `final_results/`. All CSV files there follow the same `<abbrev>_<timestamp>.csv` naming convention.
 
 If new experimental data should be included in the same analysis workflow, it needs to be organized in a structure like this:
 
