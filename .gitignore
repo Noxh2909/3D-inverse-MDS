@@ -12,7 +12,5 @@
 .vscode/
 /pictures_test/
 
-Interface.py
-
 3D-iMDS.spec
 3D inverse MDS.spec

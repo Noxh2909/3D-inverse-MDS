@@ -19,6 +19,7 @@ import sys
 import os
 import random
 import pathlib
+import shutil
 import csv
 from datetime import datetime
 from typing import Dict, Optional
@@ -51,8 +52,9 @@ from PySide6.QtGui import (
     QFont,
     QKeySequence,
     QShortcut,
+    QDesktopServices,
 )
-from PySide6.QtCore import Qt, QTimer, QMimeData, QPoint, QObject
+from PySide6.QtCore import Qt, QTimer, QMimeData, QPoint, QObject, QUrl
 from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLGridItem
 
 
@@ -94,6 +96,7 @@ PLANE_OFFSETS = {"xy": 0.0, "xz": 0.0, "yz": 0.0}
 ALIGN_OK_HTML = "<span style='color:#7CFC00'>✅ {partner}</span>"
 ALIGN_BAD_HTML = "<span style='color:#ff6666'>❌ {partner}</span>"
 APP_NAME = "3D inverse MDS"
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
 
 def app_resource_dir() -> pathlib.Path:
@@ -121,6 +124,32 @@ def app_data_dir() -> pathlib.Path:
 
     base = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local" / "share"))
     return base / APP_NAME
+
+
+def stimuli_dir() -> pathlib.Path:
+    """Return the active stimulus folder used by the experiment."""
+    if not getattr(sys, "frozen", False):
+        return app_resource_dir() / "pictures"
+
+    writable_dir = app_data_dir() / "pictures"
+    bundled_dir = app_resource_dir() / "pictures"
+
+    if writable_dir.exists():
+        return writable_dir
+
+    try:
+        writable_dir.mkdir(parents=True, exist_ok=True)
+        if bundled_dir.is_dir():
+            for path in bundled_dir.iterdir():
+                if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                    target = writable_dir / path.name
+                    if not target.exists():
+                        shutil.copy2(path, target)
+    except OSError:
+        return bundled_dir
+
+    return writable_dir
+
 
 def _make_abbrev(full_name: str) -> str:
     """Derive an abbreviation from a participant name.
@@ -317,9 +346,9 @@ class Logger:
 class FileHandler:
     """Handles image discovery, loading, and category assignment.
 
-    Images are loaded from a ``pictures_test`` folder relative to the script,
-    randomly assigned to token categories, and stored at two resolutions
-    (original for preview, scaled for UI overlays).
+    Images are loaded from the active stimulus folder, randomly assigned to
+    token categories, and stored at two resolutions (original for preview,
+    scaled for UI overlays).
     """
 
     def __init__(
@@ -338,16 +367,15 @@ class FileHandler:
 
     def pictures_dir(self) -> str:
         """Return the absolute path to the images folder."""
-        return str(app_resource_dir() / "pictures")
+        return str(stimuli_dir())
 
     def count_images(self) -> int:
         """Count image files in the pictures folder."""
         folder = self.pictures_dir()
-        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
         count = 0
         try:
             for p in pathlib.Path(folder).iterdir():
-                if p.is_file() and p.suffix.lower() in exts:
+                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
                     count += 1
         except FileNotFoundError:
             pass
@@ -371,12 +399,11 @@ class FileHandler:
     def load_images_for_categories(self):
         """Load and assign images to categories, populating the shared dicts."""
         folder = self.pictures_dir()
-        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
         paths = []
         try:
             for p in pathlib.Path(folder).iterdir():
-                if p.is_file() and p.suffix.lower() in exts:
+                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
                     paths.append(p)
         except FileNotFoundError:
             self.images_by_cat.clear()
@@ -449,6 +476,20 @@ class ConditionDialog(QDialog):
         layout.addWidget(self.radio_2d)
         layout.addWidget(self.radio_3d)
 
+        self.stimuli_btn = QPushButton("Load Stimuli Set")
+        self.stimuli_btn.setStyleSheet(
+            "QPushButton { background: #f5f5f5; color: #111; border: 1px solid #999; "
+            "border-radius: 6px; padding: 10px 20px; font-size: 14px; } "
+            "QPushButton:hover { background: #e8e8e8; }"
+        )
+        self.stimuli_btn.clicked.connect(self.open_stimuli_folder)
+        layout.addWidget(self.stimuli_btn)
+
+        self.stimuli_status = QLabel("")
+        self.stimuli_status.setWordWrap(True)
+        self.stimuli_status.setStyleSheet("color: #555; font-size: 12px;")
+        layout.addWidget(self.stimuli_status)
+
         btn = QPushButton("Start Experiment")
         btn.setStyleSheet(
             "QPushButton { background: #00cc66; color: white; border: none; "
@@ -458,7 +499,22 @@ class ConditionDialog(QDialog):
         )
         btn.clicked.connect(self.accept)
         layout.addWidget(btn)
-        self.setFixedSize(400, 250)
+        self.setFixedSize(420, 330)
+
+    def open_stimuli_folder(self):
+        """Open the active stimulus folder in the system file manager."""
+        folder = stimuli_dir()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.stimuli_status.setText(f"Could not open pictures folder: {exc}")
+            return
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        if opened:
+            self.stimuli_status.setText("Pictures folder opened.")
+        else:
+            self.stimuli_status.setText(f"Could not open pictures folder: {folder}")
 
     def get_condition(self) -> str:
         """Return the selected condition string ('2d' or '3d')."""
