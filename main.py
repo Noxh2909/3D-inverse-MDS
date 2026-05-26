@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import multiprocessing
 import subprocess
 import sys
 from typing import Sequence
@@ -125,6 +126,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 
 def main() -> int:
     """Program entry point."""
+    multiprocessing.freeze_support()
     args, analysis_args = parse_args()
     ensure_dependencies(skip_check=args.skip_dependency_check)
 

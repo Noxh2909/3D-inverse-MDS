@@ -6,6 +6,7 @@ APP_NAME="3D inverse MDS"
 ENTRY_SCRIPT="main.py"
 ASSETS_DIR="assets"
 PICTURES_DIR="pictures"
+FINAL_RESULTS_DIR="final_results"
 MAC_ICON="app_icon.icns"
 WIN_ICON="app_icon.ico"
 LINUX_ICON="app_icon.png"
@@ -149,6 +150,12 @@ PYINSTALLER_ARGS=(
 if [[ -d "${ASSETS_DIR}" ]]; then
   PYINSTALLER_ARGS+=(
     --add-data "${ASSETS_DIR}${DATA_SEPARATOR}${ASSETS_DIR}"
+  )
+fi
+
+if [[ -d "${FINAL_RESULTS_DIR}" ]]; then
+  PYINSTALLER_ARGS+=(
+    --add-data "${FINAL_RESULTS_DIR}${DATA_SEPARATOR}${FINAL_RESULTS_DIR}"
   )
 fi
 

@@ -37,8 +37,16 @@ SCENE_FIXED_HEIGHT = 910
 TOKEN_CONTAINER_W = 140
 
 POINT_COLOR = np.array([[1.0, 1.0, 0.0, 1.0]])
-CUBE_COLOR = (120, 120, 120, 0.2)
-LATTICE_COLOR = (120, 120, 120, 0.2)
+CUBE_COLOR = (0.56, 0.56, 0.60, 0.34)
+GRID_COLOR = (0.56, 0.56, 0.60, 0.28)
+HELPER_LINE_COLOR = (0.88, 0.88, 0.92, 0.45)
+LATTICE_COLOR = (0.56, 0.56, 0.60, 0.24)
+AXIS_X_COLOR = (0.86, 0.18, 0.18, 1.0)
+AXIS_X_TICK_COLOR = (0.86, 0.18, 0.18, 0.90)
+AXIS_Y_COLOR = (0.12, 0.72, 0.20, 1.0)
+AXIS_Y_TICK_COLOR = (0.12, 0.72, 0.20, 0.90)
+AXIS_Z_COLOR = (0.22, 0.38, 0.92, 1.0)
+AXIS_Z_TICK_COLOR = (0.22, 0.38, 0.92, 0.90)
 PLANE_OFFSETS = {"xy": 0.0, "xz": 0.0, "yz": 0.0}
 
 ALIGN_OK_HTML = "<span style='color:#7CFC00'>✅ {partner}</span>"
@@ -101,13 +109,18 @@ def _gl_color(color):
         elif arr.ndim >= 2 and arr.shape[-1] >= 3 and np.nanmax(arr[..., :3]) > 1.0:
             arr = arr.copy()
             arr[..., :3] /= 255.0
-        return arr
+        return np.clip(arr, 0.0, 1.0)
 
     values = tuple(float(v) for v in color)
     if len(values) >= 3 and max(values[:3]) > 1.0:
         alpha = values[3] if len(values) > 3 else 1.0
-        return (values[0] / 255.0, values[1] / 255.0, values[2] / 255.0, alpha)
-    return values
+        values = (values[0] / 255.0, values[1] / 255.0, values[2] / 255.0, alpha)
+    return tuple(max(0.0, min(1.0, value)) for value in values)
+
+
+def _set_line_color(item, color) -> None:
+    """Apply normalized line color to an existing GL line item."""
+    item.setData(color=_gl_color(color))
 
 
 def _safe_line_width(width: float) -> float:

@@ -30,6 +30,13 @@ from scipy.stats import spearmanr
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
 
+from core.paths import (
+    analysis_output_dir,
+    app_data_dir,
+    participant_data_dir,
+    stimuli_dir,
+)
+
 try:
     from tqdm.auto import tqdm as _tqdm
 except ImportError:
@@ -58,7 +65,7 @@ class AnalysisSelection:
 class AnalysisConfig:
     """Central configuration for the analysis pipeline."""
 
-    base_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent)
+    base_dir: Path = field(default_factory=app_data_dir)
 
     # Set to True for anonymous participant labels (Participant 1, 2, …).
     anonymous: bool = True
@@ -111,9 +118,14 @@ class AnalysisConfig:
     detailed_dir: Path = field(init=False)
 
     def __post_init__(self) -> None:
-        self.final_results_dir = self.base_dir / "final_results"
-        self.pictures_dir = self.base_dir / "pictures"
-        self.analysis_dir = self.base_dir / "analysis"
+        if self.base_dir == app_data_dir():
+            self.final_results_dir = participant_data_dir()
+            self.pictures_dir = stimuli_dir()
+            self.analysis_dir = analysis_output_dir()
+        else:
+            self.final_results_dir = self.base_dir / "final_results"
+            self.pictures_dir = self.base_dir / "pictures"
+            self.analysis_dir = self.base_dir / "analysis"
         self.general_dir = self.analysis_dir / "general"
         self.general_2d_dir = self.general_dir / "2d"
         self.general_3d_dir = self.general_dir / "3d"

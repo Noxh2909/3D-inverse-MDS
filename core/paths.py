@@ -9,6 +9,7 @@ import sys
 
 APP_NAME = "3D inverse MDS"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+_SEEDED_RESOURCE_DIRS: set[str] = set()
 
 
 def app_resource_dir() -> pathlib.Path:
@@ -36,6 +37,48 @@ def app_data_dir() -> pathlib.Path:
 
     base = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local" / "share"))
     return base / APP_NAME
+
+
+def _seed_writable_resource_dir(dirname: str) -> pathlib.Path:
+    """Return a writable app data subdirectory, copying bundled files once."""
+    if not getattr(sys, "frozen", False):
+        return app_resource_dir() / dirname
+
+    writable_dir = app_data_dir() / dirname
+    if dirname in _SEEDED_RESOURCE_DIRS:
+        return writable_dir
+
+    bundled_dir = app_resource_dir() / dirname
+    try:
+        writable_dir.mkdir(parents=True, exist_ok=True)
+        if bundled_dir.is_dir():
+            for source in bundled_dir.rglob("*"):
+                if not source.is_file():
+                    continue
+                target = writable_dir / source.relative_to(bundled_dir)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not target.exists():
+                    shutil.copy2(source, target)
+    except OSError:
+        return bundled_dir if bundled_dir.is_dir() else writable_dir
+
+    _SEEDED_RESOURCE_DIRS.add(dirname)
+    return writable_dir
+
+
+def generated_results_dir() -> pathlib.Path:
+    """Return the writable raw experiment results directory."""
+    return app_data_dir() / "results"
+
+
+def participant_data_dir() -> pathlib.Path:
+    """Return the writable participant data directory used by analysis."""
+    return _seed_writable_resource_dir("final_results")
+
+
+def analysis_output_dir() -> pathlib.Path:
+    """Return the writable analysis output directory."""
+    return app_data_dir() / "analysis"
 
 
 def stimuli_dir() -> pathlib.Path:

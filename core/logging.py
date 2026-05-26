@@ -8,7 +8,7 @@ from typing import Optional
 from PySide6.QtWidgets import QPlainTextEdit
 
 from .export import make_abbrev
-from .paths import app_data_dir
+from .paths import app_data_dir, participant_data_dir
 
 
 class Logger:
@@ -49,9 +49,14 @@ class Logger:
             name = make_abbrev(raw) if raw != "anonymous" else "anonymous"
         name = name or "anonymous"
 
-        log_dir = app_data_dir() / "logs" / name
-        log_dir.mkdir(parents=True, exist_ok=True)
+        log_name = f"{name}_log_{self.start_time.strftime('%Y%m%d_%H%M%S')}.csv"
+        log_line = f"{timestamp},{elapsed:.2f},{event}"
 
-        log_path = log_dir / f"{name}_log_{self.start_time.strftime('%Y%m%d_%H%M%S')}.csv"
-        self.write_log_to_file(str(log_path), f"{timestamp},{elapsed:.2f},{event}")
+        log_dirs = [
+            app_data_dir() / "logs" / name,
+            participant_data_dir() / name / "logs",
+        ]
+        for log_dir in log_dirs:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            self.write_log_to_file(str(log_dir / log_name), log_line)
         self.log_to_console(event)

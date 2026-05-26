@@ -34,6 +34,12 @@ from core.logging import Logger
 from core.paths import IMAGE_EXTENSIONS, stimuli_dir
 from ui.widgets import (
     ACTIONS_TOP_OFFSET,
+    AXIS_X_COLOR,
+    AXIS_X_TICK_COLOR,
+    AXIS_Y_COLOR,
+    AXIS_Y_TICK_COLOR,
+    AXIS_Z_COLOR,
+    AXIS_Z_TICK_COLOR,
     ALIGN_BAD_HTML,
     ALIGN_OK_HTML,
     AXIS_LEN,
@@ -43,6 +49,8 @@ from ui.widgets import (
     CUBE_WIDTH,
     DraggableToken,
     GAP_H,
+    GRID_COLOR,
+    HELPER_LINE_COLOR,
     IMAGE_CONTAINER_WH,
     IMAGE_MAX_WH,
     IMAGE_OVER_POINT_MARGIN,
@@ -75,6 +83,7 @@ from ui.widgets import (
     _line_item,
     _line_segments_item,
     _make_edge,
+    _set_line_color,
     _partner_of,
     _token_style,
     _token_style_mode,
@@ -468,11 +477,19 @@ class ExperimentWindow(QMainWindow):
         self.yz_grid.setSize(x=AXIS_LEN, y=AXIS_LEN)
         self.yz_grid.rotate(90, 0, 1, 0)
         self.yz_grid.translate(PLANE_OFFSETS["yz"], AXIS_LEN * 0.5, AXIS_LEN * 0.5)
+        try:
+            self.yz_grid.setColor(GRID_COLOR)
+        except Exception:
+            pass
 
         self.xz_grid = GLGridItem()
         self.xz_grid.setSize(x=AXIS_LEN, y=AXIS_LEN)
         self.xz_grid.rotate(90, 1, 0, 0)
         self.xz_grid.translate(AXIS_LEN * 0.5, PLANE_OFFSETS["xz"], AXIS_LEN * 0.5)
+        try:
+            self.xz_grid.setColor(GRID_COLOR)
+        except Exception:
+            pass
 
     def _build_checklist(self):
         """Build the tutorial checklist overlay."""
@@ -1541,7 +1558,7 @@ class ExperimentWindow(QMainWindow):
                 b = np.array(p0) + d * e
                 segments.append((a, b))
                 s += dash + gap
-            return [_line_segments_item(segments, color=(1, 1, 1, 0.4), width=1)]
+            return [_line_segments_item(segments, color=HELPER_LINE_COLOR, width=1)]
 
         segs = []
         segs += dashed((x, y, z), (x, y, 0.0))
@@ -1632,19 +1649,19 @@ class ExperimentWindow(QMainWindow):
         """Build axis line items with ticks for all three axes."""
         step = _auto_tick_step(AXIS_LEN)
         self.axis_items["x"] = _build_axis_solid(
-            "x", AXIS_LEN, color=(1, 0, 0, 1), width=3
+            "x", AXIS_LEN, color=AXIS_X_COLOR, width=3
         ) + _build_axis_ticks(
-            "x", AXIS_LEN, tick_step=step, color=(1, 0, 0, 0.9), width=2
+            "x", AXIS_LEN, tick_step=step, color=AXIS_X_TICK_COLOR, width=2
         )
         self.axis_items["y"] = _build_axis_solid(
-            "y", AXIS_LEN, color=(0, 1, 0, 1), width=3
+            "y", AXIS_LEN, color=AXIS_Y_COLOR, width=3
         ) + _build_axis_ticks(
-            "y", AXIS_LEN, tick_step=step, color=(0, 1, 0, 0.9), width=2
+            "y", AXIS_LEN, tick_step=step, color=AXIS_Y_TICK_COLOR, width=2
         )
         self.axis_items["z"] = _build_axis_solid(
-            "z", AXIS_LEN, color=(0, 0, 1, 1), width=3
+            "z", AXIS_LEN, color=AXIS_Z_COLOR, width=3
         ) + _build_axis_ticks(
-            "z", AXIS_LEN, tick_step=step, color=(0, 0, 1, 0.9), width=2
+            "z", AXIS_LEN, tick_step=step, color=AXIS_Z_TICK_COLOR, width=2
         )
 
     def show_z_axis(self):
@@ -1655,7 +1672,7 @@ class ExperimentWindow(QMainWindow):
             except Exception:
                 pass
             try:
-                it.setData(color=(0, 1, 0, 1))
+                _set_line_color(it, AXIS_Y_COLOR)
             except Exception:
                 pass
         try:
@@ -1672,7 +1689,10 @@ class ExperimentWindow(QMainWindow):
             except Exception:
                 pass
             try:
-                it.setData(color=(0, 1, 0, 0))
+                _set_line_color(
+                    it,
+                    (AXIS_Y_COLOR[0], AXIS_Y_COLOR[1], AXIS_Y_COLOR[2], 0.0),
+                )
             except Exception:
                 pass
         try:

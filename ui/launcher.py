@@ -27,7 +27,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.paths import APP_NAME, app_resource_dir, stimuli_dir
+from core.paths import (
+    APP_NAME,
+    analysis_output_dir,
+    app_data_dir,
+    app_resource_dir,
+    participant_data_dir,
+    stimuli_dir,
+)
 from ui.experiment_window import ExperimentWindow
 
 ANALYSIS_METRICS = (
@@ -146,6 +153,8 @@ class LauncherWindow(QMainWindow):
         self.analysis_process: QProcess | None = None
         self.metric_combos: dict[str, QComboBox] = {}
         self.number_inputs: dict[str, QLineEdit] = {}
+        self.participant_summary_container: QWidget | None = None
+        self.participant_summary_toggle: QPushButton | None = None
         self.plot_params_container: QWidget | None = None
         self.plot_params_toggle: QPushButton | None = None
         self._analysis_log_lines: list[str] = []
@@ -175,9 +184,10 @@ class LauncherWindow(QMainWindow):
                 padding: 0 6px;
             }
             QPushButton {
-                background-color: #d9d9df;
+                background: #ffffff;
+                background-color: #ffffff;
                 color: #1d1d1f;
-                border: 1px solid #b7b8c0;
+                border: 1px solid #c7c7cc;
                 border-radius: 8px;
                 padding: 4px 9px;
                 min-height: 18px;
@@ -185,68 +195,106 @@ class LauncherWindow(QMainWindow):
                 font-weight: 500;
             }
             QPushButton:hover {
-                background-color: #e1e1e6;
-                border-color: #aeb0b8;
+                background: #f5f5f7;
+                background-color: #f5f5f7;
+                border-color: #b8b8bf;
             }
             QPushButton:pressed {
-                background-color: #cacad1;
+                background: #ececf0;
+                background-color: #ececf0;
             }
             QPushButton:disabled {
                 color: #8e8e93;
-                background-color: #d7d7dc;
+                background: #f2f2f5;
+                background-color: #f2f2f5;
                 border-color: #cfcfd6;
             }
             QPushButton#primaryButton {
+                background: #007aff;
                 background-color: #007aff;
                 color: white;
                 border: 1px solid #0071eb;
                 font-weight: 700;
             }
             QPushButton#primaryButton:hover {
+                background: #0a84ff;
                 background-color: #0a84ff;
             }
             QPushButton#primaryButton:pressed {
+                background: #006edb;
                 background-color: #006edb;
             }
             QPushButton#primaryButton:disabled {
+                background: #9ac7ff;
                 background-color: #9ac7ff;
                 border-color: #9ac7ff;
                 color: rgba(255, 255, 255, 0.78);
             }
             QLineEdit,
             QComboBox {
-                background-color: #dedee4;
+                background: #ffffff;
+                background-color: #ffffff;
                 color: #1d1d1f;
-                border: 1px solid #b7b8c0;
+                border: 1px solid #c7c7cc;
                 border-radius: 7px;
-                padding: 2px 6px;
+                padding: 2px 22px 2px 6px;
                 min-height: 18px;
                 font-size: 13px;
                 selection-background-color: #007aff;
                 selection-color: white;
             }
+            QLineEdit {
+                padding: 2px 6px;
+            }
             QLineEdit:focus,
             QComboBox:focus {
+                border: 1px solid #c7c7cc;
+                background: #ffffff;
+                background-color: #ffffff;
+            }
+            QLineEdit:focus {
                 border: 2px solid #007aff;
                 padding: 1px 5px;
-                background-color: #e8e8ee;
+            }
+            QComboBox:focus {
+                padding: 2px 22px 2px 6px;
             }
             QComboBox::drop-down {
+                background: transparent;
+                background-color: transparent;
                 border: none;
-                width: 16px;
+                border-top-right-radius: 7px;
+                border-bottom-right-radius: 7px;
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 20px;
+                margin: 1px;
+            }
+            QComboBox::down-arrow {
+                width: 9px;
+                height: 9px;
             }
             QComboBox QAbstractItemView {
-                background-color: #dedee4;
-                border: 1px solid #b7b8c0;
+                background: #ffffff;
+                background-color: #ffffff;
+                border: 1px solid #d8d8de;
                 border-radius: 8px;
+                outline: 0px;
                 padding: 4px;
                 selection-background-color: #007aff;
                 selection-color: white;
             }
+            QComboBoxPrivateContainer {
+                background: #ffffff;
+                background-color: #ffffff;
+                border: 1px solid #d8d8de;
+                border-radius: 8px;
+            }
             QPlainTextEdit {
-                background-color: #dedee4;
+                background: #ffffff;
+                background-color: #ffffff;
                 color: #1d1d1f;
-                border: 1px solid #b7b8c0;
+                border: 1px solid #c7c7cc;
                 border-radius: 8px;
                 padding: 5px;
                 font-size: 11px;
@@ -254,6 +302,7 @@ class LauncherWindow(QMainWindow):
                 selection-color: white;
             }
             QPlainTextEdit#analysisLog {
+                background: #111111;
                 background-color: #111111;
                 color: #eeeeee;
                 border: 1px solid #2c2c2e;
@@ -269,18 +318,34 @@ class LauncherWindow(QMainWindow):
                 background: transparent;
             }
             QPushButton#collapsibleHeader {
-                background-color: #8e8e93;
-                border: 1px solid #85858b;
+                background: #ffffff;
+                background-color: #ffffff;
+                border: 1px solid #c7c7cc;
                 border-radius: 7px;
-                color: white;
+                color: #1d1d1f;
                 padding: 3px 7px;
                 min-height: 17px;
                 text-align: left;
                 font-weight: 700;
             }
             QPushButton#collapsibleHeader:hover {
-                background-color: #7f7f85;
-                color: white;
+                background: #f5f5f7;
+                background-color: #f5f5f7;
+                color: #1d1d1f;
+            }
+            QPushButton#smallButton {
+                background: #ffffff;
+                background-color: #ffffff;
+                border: 1px solid #c7c7cc;
+                border-radius: 7px;
+                padding: 2px 7px;
+                min-height: 16px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton#smallButton:hover {
+                background: #f5f5f7;
+                background-color: #f5f5f7;
             }
             """
         )
@@ -361,15 +426,31 @@ class LauncherWindow(QMainWindow):
         self.start_experiment_btn.clicked.connect(self.start_experiment)
         layout.addWidget(self.start_experiment_btn)
 
-        participant_label = QLabel("Participant data numbers")
-        participant_label.setStyleSheet("font-weight: 600;")
-        layout.addWidget(participant_label)
+        participant_header = QHBoxLayout()
+        participant_header.setSpacing(8)
+        self.participant_summary_toggle = QPushButton("> Participant data numbers")
+        self.participant_summary_toggle.setObjectName("collapsibleHeader")
+        self.participant_summary_toggle.clicked.connect(self._toggle_participant_summary)
+        self.reload_results_btn = QPushButton("Reload")
+        self.reload_results_btn.setObjectName("smallButton")
+        self.reload_results_btn.setFixedWidth(68)
+        self.reload_results_btn.setToolTip("Reload participant data numbers.")
+        self.reload_results_btn.clicked.connect(self.reload_participant_summary)
+        participant_header.addWidget(self.participant_summary_toggle, 1)
+        participant_header.addWidget(self.reload_results_btn)
+        layout.addLayout(participant_header)
 
+        self.participant_summary_container = QWidget()
+        participant_summary_layout = QVBoxLayout(self.participant_summary_container)
+        participant_summary_layout.setContentsMargins(0, 0, 0, 0)
+        participant_summary_layout.setSpacing(0)
         self.participant_summary = QPlainTextEdit()
         self.participant_summary.setObjectName("participantSummary")
         self.participant_summary.setReadOnly(True)
         self.participant_summary.setFixedHeight(155)
-        layout.addWidget(self.participant_summary)
+        participant_summary_layout.addWidget(self.participant_summary)
+        self.participant_summary_container.hide()
+        layout.addWidget(self.participant_summary_container)
         self._refresh_participant_summary()
 
         self.experiment_status = QLabel("")
@@ -390,7 +471,7 @@ class LauncherWindow(QMainWindow):
         self.participant_data_btn = QPushButton("Participant Data")
         self.participant_data_btn.clicked.connect(
             lambda: self._open_folder(
-                app_resource_dir() / "final_results",
+                participant_data_dir(),
                 self.analysis_status,
                 "Participant data folder opened.",
             )
@@ -398,7 +479,7 @@ class LauncherWindow(QMainWindow):
         self.analysis_folder_btn = QPushButton("Analysis Folder")
         self.analysis_folder_btn.clicked.connect(
             lambda: self._open_folder(
-                app_resource_dir() / "analysis",
+                analysis_output_dir(),
                 self.analysis_status,
                 "Analysis folder opened.",
             )
@@ -533,6 +614,19 @@ class LauncherWindow(QMainWindow):
         prefix = "v" if expanded else ">"
         self.plot_params_toggle.setText(f"{prefix} Plot and label sizes")
 
+    def _toggle_participant_summary(self) -> None:
+        if (
+            self.participant_summary_container is None
+            or self.participant_summary_toggle is None
+        ):
+            return
+        expanded = self.participant_summary_container.isHidden()
+        self.participant_summary_container.setVisible(expanded)
+        prefix = "v" if expanded else ">"
+        self.participant_summary_toggle.setText(
+            f"{prefix} Participant data numbers"
+        )
+
     def _add_parameter_row(
         self,
         layout: QGridLayout,
@@ -551,7 +645,7 @@ class LauncherWindow(QMainWindow):
 
     def _participant_rows(self) -> list[tuple[int, str, int, int]]:
         """Return participant folder rows using analysis.py's numbering order."""
-        final_results_dir = app_resource_dir() / "final_results"
+        final_results_dir = participant_data_dir()
         if not final_results_dir.is_dir():
             return []
 
@@ -590,6 +684,11 @@ class LauncherWindow(QMainWindow):
                 status.append("no CSV")
             lines.append(f"{idx}: {name} ({', '.join(status)})")
         self.participant_summary.setPlainText("\n".join(lines))
+
+    def reload_participant_summary(self) -> None:
+        """Reload participant data counts in the launcher."""
+        self._refresh_participant_summary()
+        self.experiment_status.setText("Results reloaded.")
 
     def _open_folder(self, folder: pathlib.Path, status_label: QLabel, success: str) -> None: #type:ignore
         try:
@@ -683,11 +782,6 @@ class LauncherWindow(QMainWindow):
             self.analysis_status.setText("Enable at least one analysis tool.")
             return
 
-        script = app_resource_dir() / "analysis.py"
-        if not script.exists():
-            self.analysis_status.setText(f"analysis.py not found: {script}")
-            return
-
         args = self._analysis_args()
         self._analysis_log_lines = ["Running analysis with selected parameters..."]
         self._analysis_progress_line = ""
@@ -695,9 +789,18 @@ class LauncherWindow(QMainWindow):
         self._render_analysis_log()
 
         process = QProcess(self)
-        process.setProgram(sys.executable)
-        process.setArguments([str(script), *args])
-        process.setWorkingDirectory(str(app_resource_dir()))
+        if getattr(sys, "frozen", False):
+            process.setProgram(sys.executable)
+            process.setArguments(["--analysis", *args])
+            process.setWorkingDirectory(str(app_data_dir()))
+        else:
+            script = app_resource_dir() / "analysis.py"
+            if not script.exists():
+                self.analysis_status.setText(f"analysis.py not found: {script}")
+                return
+            process.setProgram(sys.executable)
+            process.setArguments([str(script), *args])
+            process.setWorkingDirectory(str(app_resource_dir()))
         process.readyReadStandardOutput.connect(self._read_analysis_stdout)
         process.readyReadStandardError.connect(self._read_analysis_stderr)
         process.finished.connect(self._analysis_finished)

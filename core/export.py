@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .paths import app_data_dir
+from .paths import generated_results_dir, participant_data_dir
 
 
 def make_abbrev(full_name: str) -> str:
@@ -21,50 +21,71 @@ def make_abbrev(full_name: str) -> str:
     return full_name.strip().replace(" ", "_") or "anonymous"
 
 
+def _write_results_file(
+    csv_path: Path,
+    participant_name: str,
+    condition: str,
+    elapsed: float | None,
+    rows: list[tuple[str, float, float, float]],
+) -> None:
+    """Write one condition CSV in the experiment's expected format."""
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([f"Participant: {participant_name}"])
+        if elapsed is not None:
+            writer.writerow([f"Time: {elapsed:.2f}"])
+        else:
+            writer.writerow(["Time:"])
+        writer.writerow([f"Condition: {condition}"])
+        writer.writerow([])
+        writer.writerow(["mask_png", "x", "y", "z"])
+        for name, x_csv, y_csv, z_csv in rows:
+            writer.writerow([
+                name,
+                f"{x_csv:.6f}",
+                f"{y_csv:.6f}",
+                f"{z_csv:.6f}",
+            ])
+
+
 def export_results_csv(experiment: Any) -> Path | None:
     """Export placed experiment points to a condition-specific CSV file."""
-    results_root = app_data_dir() / "results"
     condition = experiment.current_condition or "unknown"
-    condition_dir = results_root / condition.lower()
-
-    try:
-        condition_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
-        experiment.logger.log_session_event(f"Failed to create results directory: {exc}")
-        return None
+    condition_key = condition.lower()
 
     raw_name = experiment.name_input.text().strip() or "anonymous"
     participant_name = make_abbrev(raw_name) if raw_name != "anonymous" else "anonymous"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = condition_dir / f"{participant_name}_{ts}.csv"
+    csv_name = f"{participant_name}_{ts}.csv"
+
+    elapsed = None
+    if experiment.start_time is not None:
+        elapsed = (datetime.now() - experiment.start_time).total_seconds()
+
+    rows = []
+    for name, xn, yn, zn in experiment._collect_combined_points_norm():
+        if condition_key == "2d":
+            x_csv, y_csv, z_csv = xn, yn, 0.0
+        else:
+            x_csv, y_csv, z_csv = xn, zn, yn
+        rows.append((name, x_csv, y_csv, z_csv))
+
+    raw_csv_path = generated_results_dir() / condition_key / csv_name
+    participant_csv_path = (
+        participant_data_dir() / participant_name / condition_key / csv_name
+    )
 
     try:
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([f"Participant: {participant_name}"])
-            if experiment.start_time is not None:
-                elapsed = (datetime.now() - experiment.start_time).total_seconds()
-                writer.writerow([f"Time: {elapsed:.2f}"])
-            else:
-                writer.writerow(["Time:"])
-            writer.writerow([f"Condition: {condition}"])
-            writer.writerow([])
-            writer.writerow(["mask_png", "x", "y", "z"])
-
-            rows = experiment._collect_combined_points_norm()
-            for name, xn, yn, zn in rows:
-                if experiment.current_condition == "2d":
-                    x_csv, y_csv, z_csv = xn, yn, 0.0
-                else:
-                    x_csv, y_csv, z_csv = xn, zn, yn
-                writer.writerow([
-                    name,
-                    f"{x_csv:.6f}",
-                    f"{y_csv:.6f}",
-                    f"{z_csv:.6f}",
-                ])
+        _write_results_file(raw_csv_path, participant_name, condition, elapsed, rows)
+        _write_results_file(
+            participant_csv_path, participant_name, condition, elapsed, rows
+        )
     except Exception as exc:
         experiment.logger.log_session_event(f"Failed to write CSV: {exc}")
         return None
 
-    return csv_path
+    experiment.logger.log_session_event(
+        f"Exported {condition.upper()} CSV: {raw_csv_path}"
+    )
+    return raw_csv_path
