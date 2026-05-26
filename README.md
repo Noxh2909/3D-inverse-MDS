@@ -1,51 +1,44 @@
 # 3D inverse MDS
 
-This repository contains the implementation, analysis pipeline, and build scripts for the bachelor thesis **"Measuring perceived similarity using Inverse Multidimensional Scaling in three dimensions"** by Noah Kogge.
+This repository contains the experiment application and analysis pipeline for the bachelor thesis **"Measuring perceived similarity using Inverse Multidimensional Scaling in three dimensions"** by Noah Kogge.
 
-At its core, the thesis investigates how the dimensionality of a spatial arrangement task influences the externalization of perceived similarity. Participants arrange the same set of stimuli in both a 2D and a 3D environment. These arrangements are then transformed into distance structures, consistency measures, and qualitative comparisons between both interaction spaces.
-
-## What the thesis is about
-
-Classical Multidimensional Scaling (MDS) usually reconstructs similarity spaces from many pairwise judgments. Inverse MDS and related spatial arrangement methods reverse that logic: instead of answering many isolated comparisons, participants place multiple stimuli directly in space so that similar objects are close together and dissimilar objects are farther apart.
-
-The bachelor thesis transfers this idea into a controlled comparison between two interaction spaces:
-
-- `2D`: stimuli are arranged on a plane
-- `3D`: stimuli are arranged in a volumetric space with an additional depth axis
-
-The central research question can be summarized as follows:
-
-**How does an additional spatial dimension change the variability, reliability, and consistency of the reconstructed similarity structure compared with established 2D procedures?**
+The project compares spatial similarity arrangements in `2D` and `3D`. Participants arrange the same set of abstract body-silhouette stimuli in both conditions. The resulting layouts are exported as coordinate data and analyzed with dissimilarity matrices, consistency measures, Procrustes alignment, Shepard diagrams, kNN preservation, axis-variance plots, and cross-dimensional RDM comparisons.
 
 ## Study design
 
-The implementation follows a single-trial, iMDS-inspired spatial arrangement paradigm.
+- `12` abstract body-silhouette stimuli are used.
+- Each participant can complete `2D`, `3D`, or both conditions.
+- The intended thesis design is a within-subject comparison between `2D` and `3D`.
+- The curated dataset in `final_results/` contains `7` participants.
+- The task is open-ended: participants place stimuli according to perceived similarity.
 
-- `12` abstract body-silhouette stimuli were used.
-- All participants completed both conditions (`2D` and `3D`).
-- The design is a `within-subject` comparison.
-- The thesis analyzes data from `7` participants.
-- The task was to arrange the stimuli according to perceived similarity.
-
-Important qualification: the project is not intended as a one-to-one reproduction of a canonical multi-arrangement iMDS protocol. Instead, it provides a custom research application designed to isolate the effect of interaction dimensionality under tightly matched conditions.
+This is a custom iMDS-inspired spatial arrangement application. It is not a one-to-one reproduction of a canonical multi-arrangement iMDS protocol.
 
 ## Project structure
 
-The most important files and directories are:
+```text
+main.py                    # central launcher with dependency check and CLI modes
+experiment.py              # QApplication entry point for the GUI launcher
+analysis.py                # analysis pipeline and CLI arguments
 
-- `experiment.py`: GUI for running the actual experiment
-- `analysis.py`: analysis pipeline for the metrics and visualizations used in the thesis
-- `main.py`: central launcher that checks dependencies and starts either the experiment or the analysis
-- `buildapp.sh`: build script for creating a packaged desktop app on macOS, Linux, or Windows
-- `pictures/`: stimulus images
-- `final_results/`: structured datasets used by the analysis
-- `analysis/`: output directory for generated analysis results
+ui/
+  launcher.py              # launcher window, experiment controls, analysis GUI
+  experiment_window.py     # experiment window and condition flow
+  widgets.py               # scene widgets, tokens, OpenGL helpers
 
-## Installation and requirements
+core/
+  paths.py                 # resource and writable data paths
+  export.py                # CSV export and participant abbreviation helpers
+  logging.py               # experiment interaction logger
 
-A recent Python setup with `python3` is recommended.
+pictures/                  # stimulus images
+final_results/             # curated participant data used by analysis
+analysis/                  # generated analysis output
+```
 
-The project uses, among others:
+## Requirements
+
+A recent Python 3 setup is recommended. The main dependencies are:
 
 - `numpy`
 - `PySide6`
@@ -56,164 +49,167 @@ The project uses, among others:
 - `scipy`
 - `tqdm`
 
-The launcher `main.py` checks these packages automatically on startup and installs missing dependencies when possible in the current Python environment.
+`main.py` checks these packages on startup and installs missing dependencies into the active Python environment when possible.
 
-## Complete pipeline
+To skip this check:
 
-The full workflow from data collection to analysis output follows these stages:
-
-```
-experiment.py                           # 1. data collection
-    └─ results/2d/<abbrev>_<ts>.csv     #    2D arrangement per participant
-    └─ results/3d/<abbrev>_<ts>.csv     #    3D arrangement per participant
-    └─ logs/<abbrev>/<abbrev>_log_<ts>.csv  # interaction log
-
-final_results/<abbrev>/                 # 2. curated dataset
-    2d/<abbrev>_<ts>.csv
-    3d/<abbrev>_<ts>.csv
-    logs/<abbrev>_log_<ts>.csv
-
-analysis.py                             # 3. analysis pipeline
-    └─ analysis/general/2d/             #    aggregated 2D outputs
-    └─ analysis/general/3d/             #    aggregated 3D outputs
-    └─ analysis/general/                #    cross-dimensional outputs
-    └─ analysis/detailed/Participant_X/ #    per-participant plots
+```bash
+python3 main.py --skip-dependency-check
 ```
 
-`<abbrev>` is the participant abbreviation derived from the entered name: first letter of the first name followed by the first letter of the last name, separated by a dot (e.g. `N.K` for Noah Kogge). If more letters are needed to distinguish participants, additional characters from the last name are used (e.g. `E.Sc` vs. `E.S`).
+## Starting the application
 
-## Running the experiment
-
-The experiment is started via the central launcher:
+Start the GUI launcher:
 
 ```bash
 python3 main.py
 ```
 
-Alternatively, the GUI can be started directly:
+Direct GUI entry point:
 
 ```bash
 python3 experiment.py
 ```
 
-### Experiment flow
+The launcher stays open while experiments or analyses are started from it.
 
-The flow follows the procedure described in the thesis:
+## GUI workflow
 
-1. The participant selects or is assigned a condition.
-2. Name and age are entered.
-3. A tutorial introduces the interaction mechanics.
-4. All stimuli are arranged according to perceived similarity.
-5. After one condition is completed, the other condition follows.
+The launcher contains two main areas:
 
-### Interaction logic
+- `Experiment`: choose the start condition, select whether `2D`, `3D`, or both conditions should run, open the stimuli folder, and start the experiment.
+- `Analysis`: open participant data, select participant numbers, configure analysis parameters, start the analysis, and open the generated analysis folder.
 
-- In `2D`, stimuli are moved on a plane.
-- In `3D`, an additional spatial axis is available.
-- The scene can be rotated in `3D`.
-- Height or depth can be adjusted through the 3D interaction.
-- The task is open-ended: participants can iteratively refine their structure.
+Participant numbers shown in the GUI follow the same folder ordering that `analysis.py` uses. This makes it possible to select participants in the analysis panel by number, for example `1,2,3`.
 
-### Where the data is written
+The analysis terminal at the bottom shows analysis output while keeping progress bars on one updating line instead of printing repeated progress lines.
 
-When run locally with Python, the experiment writes its output files to a writable project or app data directory. The participant name entered in the GUI is automatically abbreviated (e.g. `Noah Kogge` → `N.K`). Output filenames and log folders use this abbreviation instead of the full name.
+## Data flow
 
-The analysis pipeline in this repository works with the curated structure under `final_results/`. All CSV files there follow the same `<abbrev>_<timestamp>.csv` naming convention.
+During a local Python run, experiment data is written below the project directory:
 
-If new experimental data should be included in the same analysis workflow, it needs to be organized in a structure like this:
+```text
+results/
+  2d/
+    <participant>_<timestamp>.csv
+  3d/
+    <participant>_<timestamp>.csv
+logs/
+  <participant>/
+    <participant>_log_<timestamp>.csv
+```
+
+For analysis, data should be organized in `final_results/`:
 
 ```text
 final_results/
-  Participant_X/
+  N.K/
     2d/
-      file.csv
+      N.K_20260211_004247.csv
     3d/
-      file.csv
+      N.K_20260211_004938.csv
     logs/
-      logfile.csv
+      N.K_log_20260211_003947.csv
 ```
 
-## Running the analysis
+Participant abbreviations are derived from the entered name, for example `Noah Kogge` becomes `N.K`.
 
-The analysis can be started via the launcher or directly through `analysis.py`.
+In packaged builds, writable data is stored in the platform-specific app data folder:
 
-Full analysis:
+- macOS: `~/Library/Application Support/3D inverse MDS`
+- Windows: `%APPDATA%/3D inverse MDS`
+- Linux: `$XDG_DATA_HOME/3D inverse MDS` or `~/.local/share/3D inverse MDS`
+
+## Running analysis
+
+Full analysis through the launcher GUI:
+
+```bash
+python3 main.py
+```
+
+Full analysis from the CLI:
 
 ```bash
 python3 main.py --analysis
 ```
 
-or
+Direct analysis call:
 
 ```bash
 python3 analysis.py
 ```
 
-If **no analysis flags** are provided, the **full analysis suite** is executed automatically.
+If no metric flags are provided, `analysis.py` runs the full analysis suite.
 
-## Available analysis parameters
+## Launcher CLI modes
 
-The analysis can be restricted to specific metrics or plot groups.
+```bash
+python3 main.py
+```
 
-### Core selection flags
+Starts the GUI launcher.
 
-- `--procrustes`
-  Runs all Procrustes-related outputs.
-  This includes in particular:
-  - intersubject consistency plot based on Procrustes disparities
-  - Procrustes dissimilarity matrix
-  - Procrustes arrangement plot
+```bash
+python3 main.py --analysis
+```
 
-- `--spearman`
-  Generates the Spearman consistency heatmaps across participants.
+Runs the analysis pipeline only. Additional analysis arguments can be appended.
 
-- `--shepard`
-  Generates the global Shepard diagrams and the individual Shepard plots per participant.
+```bash
+python3 main.py --both
+```
 
-- `--knn`
-  Generates the kNN preservation curves:
-  - per condition
-  - combined for `2D` vs. `3D`
-  - individually per participant
+Starts the GUI first and runs analysis after the GUI exits. Additional analysis arguments can be appended.
 
-- `--axis-variance`
-  Generates the axis-variance analysis:
-  - aggregated per condition
-  - individually per participant
+## Analysis parameters
 
-- `--rdm-similarity`
-  Generates the cross-dimensional RDM outputs:
-  - aggregated `2D` vs. `3D` RDM similarity
-  - individual RDM scatterplots per participant
+The GUI exposes these parameters without the leading `--`. The CLI uses the flags listed below.
 
-- `--arrangements`
-  Generates individual arrangement plots for participants.
+### Participant and labeling options
 
-- `--dissimilarity`
-  Generates individual dissimilarity matrices for participants.
+- `--participants 1,2,3`: analyze only selected participants.
+- `--participants "[1,2,3]"`: equivalent quoted form for shells such as `zsh`.
+- `--named-participants`: use participant folder names instead of anonymous labels.
+- `--normalize-procrustes`: normalize the Procrustes dissimilarity matrix to `[0, 1]`. This is the default.
+- `--raw-procrustes`: use raw Procrustes dissimilarity values.
 
-### Participant selection
+### Plot and label sizes
 
-- `--participants 1,2,3`
-- `--participants "[1,2,3]"`
+- `--font-size`
+- `--title-font-size`
+- `--scale-number-size`
+- `--stimulus-number-size`
+- `--rdm-axis-font-size`
+- `--rdm-stimulus-number-size` alias for `--rdm-axis-font-size`
+- `--rdm-scale-font-size`
+- `--rdm-scale-number-size` alias for `--rdm-scale-font-size`
+- `--rdm-legend-font-size`
+- `--pro-rdm-axis-font-size`
+- `--pro-rdm-scale-font-size`
+- `--pro-rdm-legend-font-size`
+- `--spr-rdm-axis-font-size`
+- `--spr-rdm-scale-font-size`
+- `--spr-rdm-legend-font-size`
+- `--arrangement-axis-font-size`
+- `--matrix-number-size`
 
-Both forms are supported. In `zsh` or similar shells, the bracketed version should be quoted. The analysis will then be limited to the selected participants. This affects both aggregated outputs and individual plots.
+### Analysis modules
 
-### Additional options
+- `--procrustes`: Procrustes-based outputs.
+- `--spearman`: Spearman consistency plots.
+- `--shepard`: global and individual Shepard diagrams.
+- `--knn`: k-nearest-neighbor preservation plots.
+- `--axis-variance`: axis-variance plots.
+- `--rdm-similarity`: `2D` vs. `3D` RDM comparisons.
+- `--arrangements`: participant arrangement plots.
+- `--dissimilarity`: participant dissimilarity matrices.
 
-- `--normalize-procrustes`
-  Normalizes the Procrustes dissimilarity matrix to the range `[0, 1]`.
+The following tolerant aliases are also accepted:
 
-- `--named-participants`
-  Uses folder names instead of anonymous labels such as `Participant 1`.
-
-### Tolerant aliases
-
-In addition to the canonical flags, the following aliases are also accepted:
-
-- `--procruster` as an alias for `--procrustes`
-- `--spreamean` as an alias for `--spearman`
-- `--shaprd` as an alias for `--shepard`
+- `--procruster` for `--procrustes`
+- `--spreamean` for `--spearman`
+- `--shaprd` for `--shepard`
 
 ## Analysis examples
 
@@ -223,7 +219,7 @@ Full analysis:
 python3 main.py --analysis
 ```
 
-Procrustes-only analysis:
+Procrustes only:
 
 ```bash
 python3 main.py --analysis --procrustes
@@ -235,119 +231,59 @@ Spearman and Shepard only:
 python3 main.py --analysis --spearman --shepard
 ```
 
-Analyze only participants `1`, `2`, and `3`:
+Analyze participants `1`, `2`, and `3`:
 
 ```bash
 python3 main.py --analysis --participants 1,2,3
 ```
 
-Only kNN and axis-variance outputs for participants `1` to `3`:
+Run selected modules with custom plot sizes:
 
 ```bash
-python3 main.py --analysis --knn --axis-variance --participants 1,2,3
+python3 main.py --analysis --knn --axis-variance --font-size 14 --title-font-size 16
 ```
 
-RDM comparison for a subset:
+Use raw Procrustes values and named participants:
 
 ```bash
-python3 main.py --analysis --rdm-similarity --participants 1,2,3,4
+python3 main.py --analysis --procrustes --raw-procrustes --named-participants
 ```
-
-Direct analysis call without the launcher:
-
-```bash
-python3 analysis.py --procrustes --spearman --participants 1,2,3
-```
-
-## Metrics used in the analysis
-
-The analysis in `analysis.py` directly follows the evaluation steps described in the thesis.
-
-### 1. Relational dissimilarity
-
-Each final arrangement is converted into a pairwise dissimilarity matrix using Euclidean distances. This matrix represents the relational structure of the arrangement independently of absolute position in space.
-
-### 2. Spearman correlation
-
-Spearman rank correlation compares dissimilarity structures either across participants or between `2D` and `3D` within the same participant. It is used to quantify how strongly relational structure is preserved.
-
-### 3. Procrustes-aligned RMSE
-
-The Procrustes analysis measures geometric similarity between configurations after optimal centering, scaling, and alignment. Lower values indicate stronger geometric agreement.
-
-### 4. Shepard analysis
-
-The Shepard diagrams compare reconstructed distances against a leave-one-out consensus structure. They act as a measure of global structural reliability.
-
-### 5. k-nearest-neighbor preservation
-
-The kNN analysis evaluates how well local neighborhood structure is preserved. This is especially useful for making fine-grained local differences between `2D` and `3D` visible.
-
-### 6. Axis variance
-
-This step analyzes how strongly the available axes are used. In `2D`, it shows how evenly the planar degrees of freedom are used. In `3D`, it reveals whether the additional dimension is actively and evenly used or whether specific axes dominate.
-
-### 7. Cross-dimensional RDM similarity
-
-This step directly compares the relational structures generated by `2D` and `3D` for each participant. It helps quantify how stable a participant's personal similarity structure remains across both interaction spaces.
 
 ## Analysis output
 
-Generated figures are written to `analysis/`. Typical output locations are:
+Generated figures and tables are written to `analysis/`. Typical output locations are:
 
 - `analysis/general/2d/`
 - `analysis/general/3d/`
 - `analysis/general/`
 - `analysis/detailed/Participant_X/`
 
-Depending on the selected parameters, only the relevant subset of outputs will be written there.
+Only the selected analysis modules write output.
+
+## Metrics
+
+The analysis pipeline includes:
+
+- relational dissimilarity from Euclidean distances
+- Spearman rank consistency
+- Procrustes-aligned geometric agreement
+- Shepard diagrams against consensus structures
+- k-nearest-neighbor preservation
+- axis variance in `2D` and `3D`
+- cross-dimensional RDM similarity
 
 ## Building a desktop app
 
-The build script automatically detects the host operating system and creates the appropriate packaged app:
+The build script uses `main.py` as the entry point:
 
 ```bash
 bash buildapp.sh
 ```
 
-The build uses `main.py` as its entry point. On macOS it creates a `.app`, on Windows a `.exe`, and on Linux an executable bundle.
+On macOS it creates a `.app`, on Windows an `.exe`, and on Linux an executable bundle.
 
-## Typical workflows
+## License
 
-Start the experiment locally:
+Copyright (c) 2026 Noah Kogge. All rights reserved.
 
-```bash
-python3 main.py
-```
-
-Run the full analysis on the available results:
-
-```bash
-python3 main.py --analysis
-```
-
-Run the experiment and then analyze directly afterwards:
-
-```bash
-python3 main.py --both
-```
-
-Run the experiment and then compute only selected analysis modules:
-
-```bash
-python3 main.py --both --procrustes --shepard --participants 1,2,3
-```
-
-## Reproducibility note
-
-This README is based on the bachelor thesis and the current implementation in the repository. The analysis pipeline reproduces the methodological core of the thesis, especially the steps for:
-
-- relational dissimilarity
-- Spearman-based consistency
-- Procrustes-based geometric agreement
-- Shepard analysis
-- kNN preservation
-- axis variance
-- `2D` vs. `3D` RDM comparisons
-
-This makes it possible to trace and reproduce the methodological core of the thesis directly from the repository.
+This project is proprietary. No permission is granted to copy, modify, distribute, sublicense, publish, commercially use, or create derivative works without prior written permission from the copyright holder. See `LICENSE` for the full terms.
