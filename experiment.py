@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QCheckBox,
+    QComboBox,
+    QGroupBox,
     QMainWindow,
     QSizePolicy,
     QGridLayout,
@@ -43,6 +45,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QDialog,
     QRadioButton,
+    QToolTip,
 )
 from PySide6.QtGui import (
     QVector3D,
@@ -50,11 +53,12 @@ from PySide6.QtGui import (
     QCursor,
     QPixmap,
     QFont,
+    QIntValidator,
     QKeySequence,
     QShortcut,
     QDesktopServices,
 )
-from PySide6.QtCore import Qt, QTimer, QMimeData, QPoint, QObject, QUrl
+from PySide6.QtCore import Qt, QTimer, QMimeData, QPoint, QObject, QUrl, QProcess
 from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLGridItem
 
 
@@ -522,6 +526,518 @@ class ConditionDialog(QDialog):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Launcher Hub
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+ANALYSIS_METRICS = (
+    ("Procrustes", "--procrustes", "Run Procrustes-based outputs."),
+    ("Spearman", "--spearman", "Generate Spearman consistency plots."),
+    ("Shepard", "--shepard", "Generate global and individual Shepard diagrams."),
+    ("kNN", "--knn", "Generate kNN preservation plots."),
+    ("Axis variance", "--axis-variance", "Generate axis-variance plots."),
+    ("RDM similarity", "--rdm-similarity", "Generate 2D-vs-3D RDM comparisons."),
+    ("Arrangements", "--arrangements", "Generate participant arrangement plots."),
+    ("Dissimilarity", "--dissimilarity", "Generate participant dissimilarity matrices."),
+)
+
+ANALYSIS_NUMBER_PARAMS = (
+    ("Font size", "--font-size", "Base font size for plot labels."),
+    ("Title font size", "--title-font-size", "Font size for plot titles."),
+    ("Scale number size", "--scale-number-size", "Font size for ordinary axis scale numbers."),
+    ("Stimulus number size", "--stimulus-number-size", "Font size for ordinary stimulus number labels."),
+    (
+        "RDM axis font size",
+        "--rdm-axis-font-size",
+        "Axis/tick/stimulus font size for Spearman, Procrustes and dissimilarity RDM plots.",
+    ),
+    (
+        "RDM scale font size",
+        "--rdm-scale-font-size",
+        "Colorbar scale-number font size for Spearman, Procrustes and dissimilarity RDM plots.",
+    ),
+    (
+        "RDM legend font size",
+        "--rdm-legend-font-size",
+        "Legend font size for Spearman and Procrustes RDM mean values.",
+    ),
+    (
+        "Procrustes RDM axis font size",
+        "--pro-rdm-axis-font-size",
+        "Axis/tick font size for Procrustes dissimilarity RDM plots.",
+    ),
+    (
+        "Procrustes RDM scale font size",
+        "--pro-rdm-scale-font-size",
+        "Colorbar scale-number font size for Procrustes dissimilarity RDM plots.",
+    ),
+    (
+        "Procrustes RDM legend font size",
+        "--pro-rdm-legend-font-size",
+        "Legend font size for Procrustes mean disparity.",
+    ),
+    (
+        "Spearman RDM axis font size",
+        "--spr-rdm-axis-font-size",
+        "Axis/tick font size for Spearman consistency RDM plots.",
+    ),
+    (
+        "Spearman RDM scale font size",
+        "--spr-rdm-scale-font-size",
+        "Colorbar scale-number font size for Spearman consistency RDM plots.",
+    ),
+    (
+        "Spearman RDM legend font size",
+        "--spr-rdm-legend-font-size",
+        "Legend font size for Spearman mean rho.",
+    ),
+    (
+        "Arrangement axis font size",
+        "--arrangement-axis-font-size",
+        "Axis/tick font size for per-participant arrangement plots.",
+    ),
+    (
+        "Matrix number size",
+        "--matrix-number-size",
+        "Font size for numeric annotations outside RDM heatmaps.",
+    ),
+)
+
+
+class InfoLabel(QLabel):
+    """Immediate hover info label for analysis parameter descriptions."""
+
+    def __init__(self, description: str):
+        super().__init__("i")
+        self.description = description
+        self.setFixedSize(16, 16)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMouseTracking(True)
+        self.setToolTip(description)
+        self.setStyleSheet(
+            "QLabel { color: white; background: #555; border-radius: 8px; "
+            "font-size: 11px; font-weight: 700; }"
+        )
+
+    def _show_info(self) -> None:
+        pos = self.mapToGlobal(QPoint(self.width() + 8, self.height() // 2))
+        QToolTip.showText(pos, self.description, self)
+
+    def enterEvent(self, event):
+        self._show_info()
+        super().enterEvent(event)
+
+    def mouseMoveEvent(self, event):
+        self._show_info()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+
+class LauncherWindow(QMainWindow):
+    """Persistent hub for starting experiments and running analysis."""
+
+    def __init__(self):
+        super().__init__()
+        self.experiment_window: ExperimentWindow | None = None
+        self.analysis_process: QProcess | None = None
+        self.metric_combos: dict[str, QComboBox] = {}
+        self.number_inputs: dict[str, QLineEdit] = {}
+
+        self.setWindowTitle(APP_NAME)
+        self.setFixedSize(1060, 760)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        root = QWidget()
+        self.setCentralWidget(root)
+
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        title = QLabel("3D inverse MDS")
+        title.setStyleSheet("font-size: 22px; font-weight: 700; color: white;")
+        layout.addWidget(title)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        layout.addLayout(top_row)
+
+        top_row.addWidget(self._build_experiment_panel(), 1)
+        top_row.addWidget(self._build_analysis_panel(), 1)
+
+        self.analysis_log = QPlainTextEdit()
+        self.analysis_log.setReadOnly(True)
+        self.analysis_log.setPlaceholderText("Analysis output appears here.")
+        self.analysis_log.setFixedHeight(125)
+        self.analysis_log.setStyleSheet(
+            "QPlainTextEdit { background: #111; color: #eee; border: 1px solid #333; "
+            "border-radius: 6px; padding: 6px; font-family: Menlo, Consolas, monospace; "
+            "font-size: 11px; }"
+        )
+        layout.addWidget(self.analysis_log)
+
+    def _build_experiment_panel(self) -> QGroupBox:
+        box = QGroupBox("Experiment")
+        box.setStyleSheet(
+            "QGroupBox { font-size: 14px; font-weight: 700; margin-top: 10px; } "
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+        )
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(7)
+
+        condition_label = QLabel("Start experiment condition")
+        condition_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(condition_label)
+
+        condition_row = QHBoxLayout()
+        self.radio_2d = QRadioButton("2D Condition")
+        self.radio_3d = QRadioButton("3D Condition")
+        self.radio_2d.setChecked(True)
+        condition_row.addWidget(self.radio_2d)
+        condition_row.addWidget(self.radio_3d)
+        condition_row.addStretch(1)
+        layout.addLayout(condition_row)
+
+        run_label = QLabel("Run conditions")
+        run_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(run_label)
+
+        run_row = QHBoxLayout()
+        self.run_2d_cb = QCheckBox("2D")
+        self.run_3d_cb = QCheckBox("3D")
+        self.run_2d_cb.setChecked(True)
+        self.run_3d_cb.setChecked(True)
+        run_row.addWidget(self.run_2d_cb)
+        run_row.addWidget(self.run_3d_cb)
+        run_row.addStretch(1)
+        layout.addLayout(run_row)
+
+        folder_row = QHBoxLayout()
+        self.stimuli_btn = QPushButton("Load Stimuli Set")
+        self.stimuli_btn.clicked.connect(
+            lambda: self._open_folder(stimuli_dir(), self.experiment_status, "Pictures folder opened.")
+        )
+        folder_row.addWidget(self.stimuli_btn)
+        folder_row.addStretch(1)
+        layout.addLayout(folder_row)
+
+        self.start_experiment_btn = QPushButton("Start Experiment")
+        self.start_experiment_btn.setStyleSheet(
+            "QPushButton { background: #00a85a; color: white; border: none; "
+            "border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 700; } "
+            "QPushButton:disabled { background: #8ba897; }"
+        )
+        self.start_experiment_btn.clicked.connect(self.start_experiment)
+        layout.addWidget(self.start_experiment_btn)
+
+        self.experiment_status = QLabel("")
+        self.experiment_status.setWordWrap(True)
+        self.experiment_status.setStyleSheet("color: #555;")
+        layout.addWidget(self.experiment_status)
+        layout.addStretch(1)
+        return box
+
+    def _build_analysis_panel(self) -> QGroupBox:
+        box = QGroupBox("Analysis")
+        box.setStyleSheet(
+            "QGroupBox { font-size: 14px; font-weight: 700; margin-top: 10px; } "
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+        )
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(7)
+
+        folder_row = QHBoxLayout()
+        self.participant_data_btn = QPushButton("Participant Data")
+        self.participant_data_btn.clicked.connect(
+            lambda: self._open_folder(
+                app_resource_dir() / "final_results",
+                self.analysis_status,
+                "Participant data folder opened.",
+            )
+        )
+        self.analysis_folder_btn = QPushButton("Analysis Folder")
+        self.analysis_folder_btn.clicked.connect(
+            lambda: self._open_folder(
+                app_resource_dir() / "analysis",
+                self.analysis_status,
+                "Analysis folder opened.",
+            )
+        )
+        folder_row.addWidget(self.participant_data_btn)
+        folder_row.addWidget(self.analysis_folder_btn)
+        layout.addLayout(folder_row)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        params_widget = QWidget()
+        params_layout = QGridLayout(params_widget)
+        params_layout.setHorizontalSpacing(6)
+        params_layout.setVerticalSpacing(4)
+        params_layout.setContentsMargins(0, 0, 4, 0)
+
+        row = 0
+        params_layout.addWidget(self._section_label("General parameters"), row, 0, 1, 3)
+        row += 1
+
+        self.participants_input = QLineEdit()
+        self.participants_input.setPlaceholderText("All, e.g. 1,2,3")
+        row = self._add_parameter_row(
+            params_layout,
+            row,
+            "Participants",
+            self.participants_input,
+            "Participant list, e.g. 1,2,3 or [1,2,3]. Empty means all participants.",
+        )
+
+        self.procrustes_scale_combo = QComboBox()
+        self.procrustes_scale_combo.addItems(("Normalize", "Raw"))
+        row = self._add_parameter_row(
+            params_layout,
+            row,
+            "Procrustes scale",
+            self.procrustes_scale_combo,
+            "Normalize scales the Procrustes dissimilarity matrix to [0, 1]. Raw keeps original values.",
+        )
+
+        self.named_participants_combo = QComboBox()
+        self.named_participants_combo.addItems(("Disabled", "Enabled"))
+        row = self._add_parameter_row(
+            params_layout,
+            row,
+            "Named participants",
+            self.named_participants_combo,
+            "Uses folder names instead of anonymous labels such as Participant 1.",
+        )
+
+        row += 1
+        params_layout.addWidget(self._section_label("Plot and label sizes"), row, 0, 1, 3)
+        row += 1
+
+        for label, flag, description in ANALYSIS_NUMBER_PARAMS:
+            input_field = QLineEdit()
+            input_field.setPlaceholderText("Default")
+            input_field.setValidator(QIntValidator(1, 999, input_field))
+            input_field.setMaximumWidth(110)
+            self.number_inputs[flag] = input_field
+            row = self._add_parameter_row(
+                params_layout,
+                row,
+                label,
+                input_field,
+                description,
+            )
+
+        row += 1
+        params_layout.addWidget(self._section_label("Analysis tools"), row, 0, 1, 3)
+        row += 1
+
+        for label, flag, description in ANALYSIS_METRICS:
+            combo = QComboBox()
+            combo.addItems(("Enabled", "Disabled"))
+            combo.setCurrentText("Enabled")
+            combo.setMinimumWidth(110)
+            self.metric_combos[flag] = combo
+            row = self._add_parameter_row(
+                params_layout,
+                row,
+                label,
+                combo,
+                description,
+            )
+
+        params_layout.setColumnStretch(0, 1)
+        params_layout.setColumnStretch(2, 1)
+        scroll.setWidget(params_widget)
+        layout.addWidget(scroll, 1)
+
+        self.start_analysis_btn = QPushButton("Start Analysis")
+        self.start_analysis_btn.setStyleSheet(
+            "QPushButton { background: #1f6feb; color: white; border: none; "
+            "border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 700; } "
+            "QPushButton:disabled { background: #8ca8d4; }"
+        )
+        self.start_analysis_btn.clicked.connect(self.start_analysis)
+        layout.addWidget(self.start_analysis_btn)
+
+        self.analysis_status = QLabel("")
+        self.analysis_status.setWordWrap(True)
+        self.analysis_status.setStyleSheet("color: #555;")
+        layout.addWidget(self.analysis_status)
+        return box
+
+    def _section_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setStyleSheet("font-weight: 700; margin-top: 4px;")
+        return label
+
+    def _info_label(self, description: str) -> QLabel:
+        return InfoLabel(description)
+
+    def _add_parameter_row(
+        self,
+        layout: QGridLayout,
+        row: int,
+        label_text: str,
+        widget: QWidget,
+        description: str,
+    ) -> int:
+        label = QLabel(label_text)
+        label.setToolTip(description)
+        widget.setToolTip(description)
+        layout.addWidget(label, row, 0)
+        layout.addWidget(self._info_label(description), row, 1)
+        layout.addWidget(widget, row, 2)
+        return row + 1
+
+    def _open_folder(self, folder: pathlib.Path, status_label: QLabel, success: str) -> None:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            status_label.setText(f"Could not create folder: {exc}")
+            return
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        status_label.setText(success if opened else f"Could not open folder: {folder}")
+
+    def _selected_experiment_conditions(self) -> list[str]:
+        selected = []
+        if self.run_2d_cb.isChecked():
+            selected.append("2d")
+        if self.run_3d_cb.isChecked():
+            selected.append("3d")
+        return selected
+
+    def start_experiment(self) -> None:
+        if self.experiment_window is not None:
+            self.experiment_window.raise_()
+            self.experiment_window.activateWindow()
+            return
+
+        selected = self._selected_experiment_conditions()
+        if not selected:
+            self.experiment_status.setText("Select at least one condition.")
+            return
+
+        requested_start = "2d" if self.radio_2d.isChecked() else "3d"
+        first_condition = requested_start if requested_start in selected else selected[0]
+        condition_order = [first_condition] + [
+            condition for condition in selected if condition != first_condition
+        ]
+
+        self.experiment_window = ExperimentWindow(
+            condition=first_condition,
+            conditions_to_run=condition_order,
+            on_finished=self._experiment_finished,
+        )
+        readable = " then ".join(condition.upper() for condition in condition_order)
+        self.experiment_status.setText(f"Running experiment: {readable}")
+        self.start_experiment_btn.setEnabled(False)
+
+    def _experiment_finished(self) -> None:
+        self.experiment_window = None
+        self.start_experiment_btn.setEnabled(True)
+        self.experiment_status.setText("Experiment finished.")
+        self.raise_()
+        self.activateWindow()
+
+    def _analysis_args(self) -> list[str]:
+        args: list[str] = []
+
+        participants = self.participants_input.text().strip()
+        if participants:
+            args.extend(["--participants", participants])
+
+        if self.procrustes_scale_combo.currentText() == "Normalize":
+            args.append("--normalize-procrustes")
+        else:
+            args.append("--raw-procrustes")
+
+        if self.named_participants_combo.currentText() == "Enabled":
+            args.append("--named-participants")
+
+        for flag, input_field in self.number_inputs.items():
+            value = input_field.text().strip()
+            if value:
+                args.extend([flag, value])
+
+        enabled_metric_flags = [
+            flag
+            for flag, combo in self.metric_combos.items()
+            if combo.currentText() == "Enabled"
+        ]
+        args.extend(enabled_metric_flags)
+        return args
+
+    def start_analysis(self) -> None:
+        if self.analysis_process is not None:
+            self.analysis_status.setText("Analysis is already running.")
+            return
+
+        enabled_count = sum(
+            1 for combo in self.metric_combos.values() if combo.currentText() == "Enabled"
+        )
+        if enabled_count == 0:
+            self.analysis_status.setText("Enable at least one analysis tool.")
+            return
+
+        script = app_resource_dir() / "analysis.py"
+        if not script.exists():
+            self.analysis_status.setText(f"analysis.py not found: {script}")
+            return
+
+        args = self._analysis_args()
+        self.analysis_log.clear()
+        self.analysis_log.appendPlainText("Running analysis with selected parameters...")
+
+        process = QProcess(self)
+        process.setProgram(sys.executable)
+        process.setArguments([str(script), *args])
+        process.setWorkingDirectory(str(app_resource_dir()))
+        process.readyReadStandardOutput.connect(self._read_analysis_stdout)
+        process.readyReadStandardError.connect(self._read_analysis_stderr)
+        process.finished.connect(self._analysis_finished)
+
+        self.analysis_process = process
+        self.start_analysis_btn.setEnabled(False)
+        self.analysis_status.setText("Analysis running...")
+        process.start()
+
+    def _read_analysis_stdout(self) -> None:
+        if self.analysis_process is None:
+            return
+        text = bytes(self.analysis_process.readAllStandardOutput()).decode( #type: ignore
+            "utf-8", errors="replace"
+        )
+        if text:
+            self.analysis_log.appendPlainText(text.rstrip())
+
+    def _read_analysis_stderr(self) -> None:
+        if self.analysis_process is None:
+            return
+        text = bytes(self.analysis_process.readAllStandardError()).decode( #type: ignore
+            "utf-8", errors="replace"
+        )
+        if text:
+            self.analysis_log.appendPlainText(text.rstrip())
+
+    def _analysis_finished(self, exit_code: int, _exit_status) -> None:
+        self.analysis_process = None
+        self.start_analysis_btn.setEnabled(True)
+        if exit_code == 0:
+            self.analysis_status.setText("Analysis finished. Results are in the analysis folder.")
+        else:
+            self.analysis_status.setText(f"Analysis failed with exit code {exit_code}.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Widget Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -983,9 +1499,17 @@ class ExperimentWindow(QMainWindow):
         condition: Initial condition ('2d' or '3d').
     """
 
-    def __init__(self, condition: str):
+    def __init__(
+        self,
+        condition: str,
+        conditions_to_run: list[str] | None = None,
+        on_finished=None,
+    ):
         super().__init__()
         self.current_condition = condition
+        self.conditions_to_run = conditions_to_run or ["2d", "3d"]
+        self.on_finished = on_finished
+        self._finish_notified = False
         self.setUpdatesEnabled(False)
 
         self._init_state()
@@ -1003,6 +1527,13 @@ class ExperimentWindow(QMainWindow):
         self._load_images()
 
         QTimer.singleShot(0, self._finalize_startup)
+
+    def closeEvent(self, event):
+        """Notify the hub when the experiment window is closed."""
+        if not self._finish_notified and callable(self.on_finished):
+            self._finish_notified = True
+            QTimer.singleShot(0, self.on_finished)
+        super().closeEvent(event)
 
     # ══════════════════════════════════════════════════════════════════════
     # State Initialization
@@ -3010,12 +3541,21 @@ class ExperimentWindow(QMainWindow):
         # ── Condition switching ───────────────────────────────────────
         self.submitted_conditions.add(self.current_condition)
 
-        if self.submitted_conditions == {"2d", "3d"}:
+        remaining_conditions = [
+            condition
+            for condition in self.conditions_to_run
+            if condition not in self.submitted_conditions
+        ]
+        if not remaining_conditions:
             self.experiment_running = False
-            QApplication.quit()
+            self.logger.log_session_event("Experiment sequence finished")
+            self.close()
             return
 
-        if self.current_condition == "2d":
+        next_condition = remaining_conditions[0]
+        previous_condition = self.current_condition
+
+        if next_condition == "3d":
             self.current_condition = "3d"
             self.condition_label.setText("3D Condition")
             self.condition_label.adjustSize()
@@ -3036,7 +3576,9 @@ class ExperimentWindow(QMainWindow):
             self.update_label()
             self.update_progress_counter()
             self.reset_all_points()
-            self.logger.log_session_event("submitted 2D, switched to 3D")
+            self.logger.log_session_event(
+                f"submitted {previous_condition.upper()}, switched to 3D"
+            )
         else:
             self.current_condition = "2d"
             self.condition_label.setText("2D Condition")
@@ -3057,7 +3599,9 @@ class ExperimentWindow(QMainWindow):
             self.update_label()
             self.update_progress_counter()
             self.reset_all_points()
-            self.logger.log_session_event("submitted 3D, switched to 2D")
+            self.logger.log_session_event(
+                f"submitted {previous_condition.upper()}, switched to 2D"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3080,11 +3624,8 @@ def main() -> int:
         except Exception:
             pass
 
-    dialog = ConditionDialog()
-    if dialog.exec() != QDialog.DialogCode.Accepted:
-        return 0
-
-    window = ExperimentWindow(condition=dialog.get_condition())
+    window = LauncherWindow()
+    window.show()
     return app.exec()
 
 
