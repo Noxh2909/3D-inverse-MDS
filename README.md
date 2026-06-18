@@ -282,6 +282,10 @@ bash buildapp.sh
 
 On macOS it creates a `.app`, on Windows an `.exe`, and on Linux an executable bundle.
 
+## Results
+
+This repository yields the results of the thesis in the final_results/ folder. Plots used in the Thesis can be reproduced. 
+
 ## License
 
 Copyright (c) 2026 Noah Kogge. All rights reserved.
