@@ -824,8 +824,9 @@ class PlotFactory:
         ax.bar(x, disparities, color="steelblue", edgecolor="black")
 
         mean_d = np.mean(disparities)
+        sd_d = np.std(disparities, ddof=1) if len(disparities) > 1 else 0.0
         ax.axhline(mean_d, color="red", linestyle="--", linewidth=2,
-                    label=f"Mean: {mean_d:.4f}")
+                    label=f"Mean: {mean_d:.4f}\nSD: {sd_d:.4f}")
         ax.set(xlabel="P", ylabel="Procrustes Disparity")
         ax.set_xticks(x)
         ax.set_xticklabels(participant_names, rotation=45, ha="right")
@@ -847,8 +848,11 @@ class PlotFactory:
                 D[i, j] = D[j, i] = rmse
 
         off_diag = ~np.eye(n, dtype=bool)
-        mean_d = np.mean(D[off_diag])
-        max_d = np.max(D[off_diag]) if np.any(off_diag) else 0.0
+        pairwise = np.triu(np.ones_like(D, dtype=bool), k=1)
+        pairwise_values = D[pairwise]
+        mean_d = np.mean(pairwise_values)
+        sd_d = np.std(pairwise_values, ddof=1) if len(pairwise_values) > 1 else 0.0
+        max_d = np.max(pairwise_values) if len(pairwise_values) else 0.0
 
         if normalize and max_d > 0:
             vals = D / max_d
@@ -886,7 +890,7 @@ class PlotFactory:
             scale_font_size=self.cfg.pro_rdm_scale_font_size,
         )
         self._add_metric_legend(
-            ax, f"Mean disparity = {mean_d:.4f}",
+            ax, f"Mean disparity = {mean_d:.4f}\nSD = {sd_d:.4f}",
             legend_font_size=self.cfg.pro_rdm_legend_font_size)
         plt.tight_layout()
         self._save(fig, out_path)
