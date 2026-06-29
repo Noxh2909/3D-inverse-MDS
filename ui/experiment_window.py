@@ -63,6 +63,7 @@ from ui.widgets import (
     PLANE_OFFSETS,
     POINT_COLOR,
     POINT_SIZE,
+    POINT_WS,
     PREVIEW_TOP_OFFSET,
     ROW_SPACING,
     SCENE_BOTTOM_OFFSET,
@@ -1292,10 +1293,10 @@ class ExperimentWindow(QMainWindow):
         if pid in self.placed_points:
             return self.placed_points[pid][0]
         item = GLScatterPlotItem(
-            pos=np.array([[0.0, 0.0, 0.0]]),
-            size=POINT_SIZE,
-            color=POINT_COLOR,
-            pxMode=True,
+            pos=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
+            size=POINT_WS,
+            color=np.array(POINT_COLOR, dtype=np.float32),
+            pxMode=False,
         )
         self.view.addItem(item)
         self.placed_points[pid] = (item, [0.0, 0.0, 0.0])
@@ -1307,7 +1308,7 @@ class ExperimentWindow(QMainWindow):
         x, y, z = map(float, coords)
         if self.current_condition == "2d":
             y = 0.0
-        pos = np.array([[x, y, z]], dtype=float)
+        pos = np.array([[x, y, z]], dtype=np.float32)
         item.setData(pos=pos)
         self.placed_points[pid] = (item, [x, y, z])
         self.update_point_label(pid)
@@ -1488,9 +1489,9 @@ class ExperimentWindow(QMainWindow):
             return
         _, c_self = self.placed_points[pid]
         _, c_part = self.placed_points[partner]
-        color = np.array([[1.0, 1.0, 0.0, 1.0]])
+        color = np.array([[1.0, 1.0, 0.0, 1.0]], dtype=np.float32)
         if abs(float(c_self[2]) - float(c_part[2])) <= Z_ALIGN_EPS:
-            color = np.array([[0.0, 1.0, 0.0, 1.0]])
+            color = np.array([[0.0, 1.0, 0.0, 1.0]], dtype=np.float32)
         self.placed_points[pid][0].setData(color=color)
         self.placed_points[partner][0].setData(color=color)
 
@@ -1886,8 +1887,8 @@ class ExperimentWindow(QMainWindow):
 
         if pid in self.placed_points:
             it, _ = self.placed_points[pid]
-            it.setData(size=POINT_SIZE + 10)
-            it.setData(color=np.array([[1.0, 1.0, 1.0, 1.0]]))
+            it.setData(size=POINT_WS * 1.8)
+            it.setData(color=np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32))
 
     def update_token_states(self):
         """Update enabled/disabled state and styles of all tokens."""

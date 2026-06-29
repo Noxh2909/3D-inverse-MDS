@@ -359,7 +359,7 @@ class LauncherWindow(QMainWindow):
         layout.setSpacing(10)
 
         title = QLabel("3D inverse MDS")
-        title.setStyleSheet("font-size: 22px; font-weight: 700; color: white;")
+        title.setStyleSheet("font-size: 22px; font-weight: 700; color: black;")
         layout.addWidget(title)
 
         top_row = QHBoxLayout()

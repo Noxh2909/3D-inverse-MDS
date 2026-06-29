@@ -25,6 +25,11 @@ def main() -> int:
     )
 
     app = QApplication(sys.argv)
+    app.setStyleSheet(
+        ""
+        "ExperimentWindow { background-color: #141414; }"
+        "ExperimentWindow > QWidget { background-color: #141414; }"
+    )
     try:
         app.setFont(QFont("SF Pro Text", 12))
     except Exception:

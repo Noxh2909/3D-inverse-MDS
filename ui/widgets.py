@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Optional
 
 import numpy as np
@@ -16,6 +17,7 @@ TICK_SIZE = 0.10
 LABEL_WIDTH = 80
 INPUT_WIDTH = 120
 POINT_SIZE = 16
+POINT_WS = 0.10   # World-space point size used with pxMode=False (AXIS_LEN=10)
 Z_ALIGN_EPS = 0.5
 LABEL_OVER_POINT_MARGIN = 8
 IMAGE_OVER_POINT_MARGIN = 32
@@ -36,10 +38,10 @@ SCENE_BOTTOM_OFFSET = 22
 SCENE_FIXED_HEIGHT = 910
 TOKEN_CONTAINER_W = 140
 
-POINT_COLOR = np.array([[1.0, 1.0, 0.0, 1.0]])
+POINT_COLOR = np.array([[1.0, 1.0, 0.0, 1.0]], dtype=np.float32)
 CUBE_COLOR = (0.56, 0.56, 0.60, 0.34)
 GRID_COLOR = (0.56, 0.56, 0.60, 0.28)
-HELPER_LINE_COLOR = (0.88, 0.88, 0.92, 0.45)
+HELPER_LINE_COLOR = (0.88, 0.88, 0.92, 0.75)
 LATTICE_COLOR = (0.56, 0.56, 0.60, 0.24)
 AXIS_X_COLOR = (0.86, 0.18, 0.18, 1.0)
 AXIS_X_TICK_COLOR = (0.86, 0.18, 0.18, 0.90)
@@ -124,8 +126,11 @@ def _set_line_color(item, color) -> None:
 
 
 def _safe_line_width(width: float) -> float:
-    """Use line widths supported reliably by macOS OpenGL contexts."""
-    return 1.0 if float(width) > 1.0 else float(width)
+    """Use conservative widths on macOS but keep requested width elsewhere."""
+    width = float(width)
+    if sys.platform == "darwin" and width > 1.0:
+        return 1.0
+    return width
 
 
 def _line_item(p0, p1, color=(1, 1, 1, 1), width=1):
@@ -284,7 +289,18 @@ class SceneView(GLViewWidget):
             GLLinePlotItem._shaderProgram = None
         except Exception:
             pass
+        try:
+            from pyqtgraph.opengl import GLScatterPlotItem as _GLSPI
+            _GLSPI._shaderProgram = None
+        except Exception:
+            pass
         super().initializeGL()
+        try:
+            from OpenGL.GL import glEnable, GL_VERTEX_PROGRAM_POINT_SIZE, GL_POINT_SPRITE
+            glEnable(GL_VERTEX_PROGRAM_POINT_SIZE)
+            glEnable(GL_POINT_SPRITE)
+        except Exception:
+            pass
 
     # ── Drag & Drop ───────────────────────────────────────────────────────
 
@@ -509,13 +525,16 @@ class SceneView(GLViewWidget):
                 cat = self.hover_pid.split(".")[0]
                 exp.set_preview_for_category(cat)
                 item, _ = exp.placed_points[self.hover_pid]
-                item.setData(color=np.array([[1, 1, 1, 1]]), size=POINT_SIZE + 6)
+                item.setData(
+                    color=np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32),
+                    size=POINT_WS * 1.5,
+                )
                 for pid, (itm, _) in exp.placed_points.items():
                     if pid != self.hover_pid:
-                        itm.setData(color=POINT_COLOR, size=POINT_SIZE)
+                        itm.setData(color=POINT_COLOR, size=POINT_WS)
             else:
                 for pid, (item, _) in exp.placed_points.items():
-                    item.setData(color=POINT_COLOR, size=POINT_SIZE)
+                    item.setData(color=POINT_COLOR, size=POINT_WS)
         except Exception:
             pass
 
